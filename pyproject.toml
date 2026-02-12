@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bookforge"
+version = "0.1.0"
+description = "IDEA/TEXT to KDP-ready interior+cover PDFs with QC"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "reportlab>=4.0.0",
+  "Pillow>=10.0.0",
+  "pypdf>=4.0.0",
+]
+
+[project.scripts]
+bookforge = "bookforge.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["bookforge*"]

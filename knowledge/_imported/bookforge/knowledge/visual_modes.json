@@ -1,0 +1,28 @@
+{
+  "visual_modes": {
+    "watercolor": {
+      "description": "Soft, flowing, organic",
+      "best_for": ["gentle stories", "nature themes", "dreamy atmospheres"],
+      "techniques": ["wet-on-wet", "gradients", "light washes"],
+      "emotional_tone": "calm, peaceful, nostalgic"
+    },
+    "digital_illustration": {
+      "description": "Clean, vibrant, versatile",
+      "best_for": ["modern stories", "fantasy", "educational content"],
+      "techniques": ["vector art", "digital painting", "bold outlines"],
+      "emotional_tone": "energetic, clear, engaging"
+    },
+    "pencil_sketch": {
+      "description": "Intimate, detailed, textural",
+      "best_for": ["introspective stories", "realistic settings", "emotional depth"],
+      "techniques": ["cross-hatching", "shading", "line work"],
+      "emotional_tone": "thoughtful, authentic, warm"
+    },
+    "collage": {
+      "description": "Playful, textured, unique",
+      "best_for": ["creative stories", "abstract concepts", "whimsical tales"],
+      "techniques": ["layering", "mixed media", "pattern mixing"],
+      "emotional_tone": "fun, innovative, curious"
+    }
+  }
+}

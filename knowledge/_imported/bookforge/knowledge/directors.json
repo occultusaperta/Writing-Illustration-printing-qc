@@ -1,0 +1,22 @@
+{
+  "directors": {
+    "hayao_miyazaki": {
+      "style": "Whimsical, fantastical, gentle",
+      "themes": ["nature", "childhood wonder", "magic in everyday life"],
+      "color_palette": ["soft pastels", "natural greens", "sky blues"],
+      "visual_motifs": ["flying", "transformation", "nature spirits"]
+    },
+    "wes_anderson": {
+      "style": "Symmetrical, precise, quirky",
+      "themes": ["family dynamics", "nostalgia", "order and chaos"],
+      "color_palette": ["warm vintage tones", "pastels", "saturated primaries"],
+      "visual_motifs": ["centered composition", "dollhouse aesthetics", "retro details"]
+    },
+    "pixar": {
+      "style": "Emotionally resonant, character-driven",
+      "themes": ["friendship", "growing up", "finding purpose"],
+      "color_palette": ["vibrant", "warm lighting", "expressive"],
+      "visual_motifs": ["anthropomorphism", "journey", "heartfelt moments"]
+    }
+  }
+}
