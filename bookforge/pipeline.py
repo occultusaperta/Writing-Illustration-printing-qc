@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from bookforge.illustration.fal_flux import FalFluxIllustrator
 from bookforge.knowledge.loader import KnowledgeLoader
@@ -28,17 +28,32 @@ class BookforgePipeline:
             "status": "PASS" if passed else "FAIL",
             "knowledge_files": loaded["knowledge_sources"],
             "pdf_count": len(loaded["pdf_sources_used"]),
-            "style_refs_count": loaded["style_refs_count"],
+            "knowledge_docs_count": len(loaded["knowledge_docs_used"]),
+            "style_refs_count": loaded["style_refs_used"],
             "missing": missing,
         }
 
-    def run(self, idea: str, pages: int, size: str, out_dir: str, stop_after: str | None = None) -> Dict[str, Any]:
+    def run(self, idea: str, pages: int, size: str, out_dir: str, stop_after: str | None = None, writer: str = "full-pipeline") -> Dict[str, Any]:
         out = Path(out_dir)
         images_dir = out / "images"
         out.mkdir(parents=True, exist_ok=True)
 
+        self.story = StoryAgent(writer=writer)
         story = self.story.run(idea=idea, pages=pages)
         (out / "story.md").write_text(story["story_markdown"], encoding="utf-8")
+        (out / "story_metadata.json").write_text(
+            json.dumps(
+                {
+                    "knowledge_sources": story["knowledge_sources"],
+                    "knowledge_keys_used": story["knowledge_keys_used"],
+                    "pdf_sources_used": story["pdf_sources_used"],
+                    "knowledge_docs_used": story.get("knowledge_docs_used", []),
+                    "style_refs_used": story.get("style_refs_used", 0),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
         loaded = self.loader.load()
         directors = list(loaded["knowledge"]["directors"]["directors"].keys())
@@ -54,6 +69,8 @@ class BookforgePipeline:
                 "visual_modes.visual_modes[0]": modes[0],
             },
             "pdf_sources_used": loaded["pdf_sources_used"],
+            "knowledge_docs_used": loaded["knowledge_docs_used"],
+            "style_refs_used": loaded["style_refs_used"],
             "sample_spreads": [
                 {"spread": 1, "left_page": 2, "right_page": 3, "note": "intro mood"},
                 {"spread": 2, "left_page": 4, "right_page": 5, "note": "conflict mood"},
@@ -74,6 +91,8 @@ class BookforgePipeline:
             "knowledge_sources": story["knowledge_sources"],
             "knowledge_keys_used": story["knowledge_keys_used"],
             "pdf_sources_used": story["pdf_sources_used"],
+            "knowledge_docs_used": story.get("knowledge_docs_used", []),
+            "style_refs_used": story.get("style_refs_used", 0),
         }
         (out / "page_plan.json").write_text(json.dumps(page_plan, indent=2), encoding="utf-8")
 
@@ -92,6 +111,8 @@ class BookforgePipeline:
                 "style.visual_mode": style_bible["visual_mode"],
             },
             "pdf_sources_used": loaded["pdf_sources_used"],
+            "knowledge_docs_used": loaded["knowledge_docs_used"],
+            "style_refs_used": loaded["style_refs_used"],
         }
         (out / "prompts.json").write_text(json.dumps(prompts, indent=2), encoding="utf-8")
 

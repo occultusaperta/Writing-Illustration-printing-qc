@@ -4,16 +4,14 @@ from typing import Any, Dict, List
 
 from bookforge.knowledge.loader import KnowledgeLoader
 from bookforge.schemas import StoryOutput, StoryPage
+from bookforge.story.full_pipeline_writer import FullPipelineWriter
 
 
-class StoryAgent:
-    def __init__(self) -> None:
-        self.loader = KnowledgeLoader()
+class TemplateStoryWriter:
+    """Simple deterministic template writer fallback."""
 
-    def run(self, idea: str, pages: int) -> Dict[str, Any]:
-        loaded = self.loader.load()
+    def build_story(self, idea: str, pages: int, loaded: Dict[str, Any]) -> StoryOutput:
         knowledge = loaded["knowledge"]
-
         age_defaults = knowledge["psychology"]["age_groups"]["ages_3_5"]
         theme = age_defaults["themes"][0]
         title = f"The Wonderful {idea.title()}"
@@ -29,11 +27,9 @@ class StoryAgent:
                 )
             )
 
-        markdown = "\n".join([f"# {title}", "", f"Theme: {theme}", ""] + [
-            f"## Page {p.page_number}\n{p.text}" for p in story_pages
-        ])
+        markdown = "\n".join([f"# {title}", "", f"Theme: {theme}", ""] + [f"## Page {p.page_number}\n{p.text}" for p in story_pages])
 
-        output = StoryOutput(
+        return StoryOutput(
             title=title,
             story_markdown=markdown,
             pages=story_pages,
@@ -43,8 +39,9 @@ class StoryAgent:
                 "directors.directors": list(knowledge["directors"]["directors"].keys())[:2],
             },
             pdf_sources_used=loaded["pdf_sources_used"],
+            knowledge_docs_used=loaded["knowledge_docs_used"],
+            style_refs_used=loaded["style_refs_used"],
         )
-        return output.to_dict()
 
     def _beats(self, idea: str, pages: int) -> List[str]:
         arc = [
@@ -55,7 +52,22 @@ class StoryAgent:
             "Kindness and teamwork solve the problem.",
             "Everyone celebrates and rests happily.",
         ]
-        result = []
-        for i in range(pages):
-            result.append(arc[i % len(arc)])
-        return result
+        return [arc[i % len(arc)] for i in range(pages)]
+
+
+class StoryAgent:
+    def __init__(self, writer: str = "full-pipeline") -> None:
+        self.loader = KnowledgeLoader()
+        self.writer_name = writer
+        self.template_writer = TemplateStoryWriter()
+        self.full_pipeline_writer = FullPipelineWriter()
+
+    def run(self, idea: str, pages: int) -> Dict[str, Any]:
+        loaded = self.loader.load()
+
+        if self.writer_name == "template":
+            output = self.template_writer.build_story(idea=idea, pages=pages, loaded=loaded)
+        else:
+            output = self.full_pipeline_writer.build_story(idea=idea, pages=pages, loaded=loaded)
+
+        return output.to_dict()
