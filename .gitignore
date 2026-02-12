@@ -36,6 +36,7 @@ env/
 # Output files (but keep directory structure)
 bookforge/output/*
 !bookforge/output/.gitkeep
+test-output/
 
 # OS
 .DS_Store
