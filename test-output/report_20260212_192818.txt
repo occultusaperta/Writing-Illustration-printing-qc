@@ -1,0 +1,32 @@
+BOOKFORGE PIPELINE REPORT
+============================================================
+
+Generated: 20260212_192818
+Success: True
+
+BOOK DETAILS
+------------------------------------------------------------
+Idea: a magical garden
+Title: The Magical A Magical Garden
+Age Group: ages_5_7
+Pages: 25
+Words: 171
+
+OUTPUT FILES
+------------------------------------------------------------
+Interior PDF: test-output/interior.pdf
+Cover PDF: test-output/cover.pdf
+
+KDP PREFLIGHT
+------------------------------------------------------------
+Status: PASSED
+
+Checks Passed:
+  ✓ Page count (25) is within acceptable range
+  ✓ Word count (171) is acceptable
+  ✓ Interior PDF exists: interior.pdf
+  ✓ Cover PDF exists: cover.pdf
+  ✓ Interior file format is acceptable
+  ✓ Story has title
+  ✓ All pages have content
+
