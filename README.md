@@ -12,8 +12,17 @@ A minimal pipeline for creating KDP-ready children's books with automated story 
 
 ## Installation
 
+### Quick Install
+
 ```bash
 pip install -r requirements.txt
+```
+
+### Install as Package (Optional)
+
+```bash
+pip install -e .
+# Now you can use: bookforge run --idea "your idea"
 ```
 
 ## Usage

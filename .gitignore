@@ -37,6 +37,7 @@ env/
 bookforge/output/*
 !bookforge/output/.gitkeep
 test-output/
+demo_output/
 
 # OS
 .DS_Store
