@@ -1,155 +1,133 @@
-"""Pipeline orchestrator for bookforge"""
+from __future__ import annotations
+
 import json
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, List
 
-from .agents import (
-    StoryAgent,
-    StyleBibleAgent,
-    IllustratorAgent,
-    LayoutAgent,
-    KDPPreflightAgent
-)
+from bookforge.illustration.fal_flux import FalFluxIllustrator
+from bookforge.knowledge.loader import KnowledgeLoader
+from bookforge.layout.pdf import PDFLayoutEngine, parse_trim_size
+from bookforge.qc.kdp_preflight import KDPPreflight
+from bookforge.story.agent import StoryAgent
 
 
-class Pipeline:
-    """Orchestrates the book creation pipeline"""
-    
-    def __init__(self, output_dir: str = None):
-        self.output_dir = output_dir or "bookforge/output"
-        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
-        
-        # Initialize agents
-        self.story_agent = StoryAgent()
-        self.style_bible_agent = StyleBibleAgent()
-        self.illustrator_agent = IllustratorAgent()
-        self.layout_agent = LayoutAgent()
-        self.kdp_preflight_agent = KDPPreflightAgent()
-    
-    def run(self, idea: str, age_group: str = "ages_3_5") -> Dict[str, Any]:
-        """Run the complete pipeline"""
-        print("\n" + "="*60)
-        print("BOOKFORGE PIPELINE STARTING")
-        print("="*60)
-        print(f"Idea: {idea}")
-        print(f"Age Group: {age_group}")
-        print(f"Output Directory: {self.output_dir}")
-        print("="*60 + "\n")
-        
-        context = {
-            "idea": idea,
-            "age_group": age_group,
-            "output_dir": self.output_dir
-        }
-        
-        # Step 1: Generate story
-        story_result = self.story_agent.run(context)
-        context.update(story_result)
-        
-        # Step 2: Create style bible (with approval gate)
-        style_result = self.style_bible_agent.run(context)
-        context.update(style_result)
-        
-        # Only proceed if style bible is approved
-        if not style_result.get("approved", False):
-            print("Pipeline stopped: Style bible not approved")
-            return self._create_report(context, success=False)
-        
-        # Step 3: Generate illustrations
-        illustration_result = self.illustrator_agent.run(context)
-        context.update(illustration_result)
-        
-        # Step 4: Create layout PDFs
-        layout_result = self.layout_agent.run(context)
-        context.update(layout_result)
-        
-        # Step 5: Run KDP preflight checks
-        preflight_result = self.kdp_preflight_agent.run(context)
-        context.update(preflight_result)
-        
-        # Generate final report
-        report = self._create_report(context, success=True)
-        
-        print("\n" + "="*60)
-        print("PIPELINE COMPLETED")
-        print("="*60)
-        print(f"Status: {preflight_result.get('status', 'UNKNOWN')}")
-        print(f"Report: {report['report_path']}")
-        print("="*60 + "\n")
-        
-        return report
-    
-    def _create_report(self, context: Dict[str, Any], success: bool) -> Dict[str, Any]:
-        """Create a final report"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_path = Path(self.output_dir) / f"report_{timestamp}.json"
-        
-        report_data = {
-            "timestamp": timestamp,
-            "success": success,
-            "idea": context.get("idea", ""),
-            "age_group": context.get("age_group", ""),
-            "story_title": context.get("story", {}).get("title", ""),
-            "page_count": len(context.get("story", {}).get("pages", [])),
-            "word_count": context.get("word_count", 0),
-            "style_approved": context.get("approved", False),
-            "interior_pdf": context.get("interior_pdf", ""),
-            "cover_pdf": context.get("cover_pdf", ""),
-            "preflight_status": context.get("status", "NOT RUN"),
-            "preflight_checks": context.get("checks", []),
-            "preflight_warnings": context.get("warnings", []),
-            "preflight_errors": context.get("errors", [])
-        }
-        
-        with open(report_path, 'w', encoding='utf-8') as f:
-            json.dump(report_data, f, indent=2)
-        
-        # Also create a human-readable report
-        text_report_path = Path(self.output_dir) / f"report_{timestamp}.txt"
-        with open(text_report_path, 'w', encoding='utf-8') as f:
-            f.write("BOOKFORGE PIPELINE REPORT\n")
-            f.write("="*60 + "\n\n")
-            f.write(f"Generated: {timestamp}\n")
-            f.write(f"Success: {success}\n\n")
-            
-            f.write("BOOK DETAILS\n")
-            f.write("-"*60 + "\n")
-            f.write(f"Idea: {report_data['idea']}\n")
-            f.write(f"Title: {report_data['story_title']}\n")
-            f.write(f"Age Group: {report_data['age_group']}\n")
-            f.write(f"Pages: {report_data['page_count']}\n")
-            f.write(f"Words: {report_data['word_count']}\n\n")
-            
-            f.write("OUTPUT FILES\n")
-            f.write("-"*60 + "\n")
-            f.write(f"Interior PDF: {report_data['interior_pdf']}\n")
-            f.write(f"Cover PDF: {report_data['cover_pdf']}\n\n")
-            
-            f.write("KDP PREFLIGHT\n")
-            f.write("-"*60 + "\n")
-            f.write(f"Status: {report_data['preflight_status']}\n\n")
-            
-            if report_data['preflight_checks']:
-                f.write("Checks Passed:\n")
-                for check in report_data['preflight_checks']:
-                    f.write(f"  {check}\n")
-                f.write("\n")
-            
-            if report_data['preflight_warnings']:
-                f.write("Warnings:\n")
-                for warning in report_data['preflight_warnings']:
-                    f.write(f"  ⚠ {warning}\n")
-                f.write("\n")
-            
-            if report_data['preflight_errors']:
-                f.write("Errors:\n")
-                for error in report_data['preflight_errors']:
-                    f.write(f"  ✗ {error}\n")
-                f.write("\n")
-        
+class BookforgePipeline:
+    def __init__(self) -> None:
+        self.loader = KnowledgeLoader()
+        self.story = StoryAgent()
+        self.illustrator = FalFluxIllustrator()
+        self.layout = PDFLayoutEngine()
+        self.preflight = KDPPreflight()
+
+    def doctor(self) -> Dict[str, Any]:
+        loaded = self.loader.load()
+        required = [Path(self.loader.knowledge_root / p) for p in self.loader.REQUIRED_JSON]
+        missing = [str(p) for p in required if not p.exists()]
+        passed = not missing
         return {
-            "report_path": str(report_path),
-            "text_report_path": str(text_report_path),
-            "report_data": report_data
+            "status": "PASS" if passed else "FAIL",
+            "knowledge_files": loaded["knowledge_sources"],
+            "pdf_count": len(loaded["pdf_sources_used"]),
+            "style_refs_count": loaded["style_refs_count"],
+            "missing": missing,
+        }
+
+    def run(self, idea: str, pages: int, size: str, out_dir: str, stop_after: str | None = None) -> Dict[str, Any]:
+        out = Path(out_dir)
+        images_dir = out / "images"
+        out.mkdir(parents=True, exist_ok=True)
+
+        story = self.story.run(idea=idea, pages=pages)
+        (out / "story.md").write_text(story["story_markdown"], encoding="utf-8")
+
+        loaded = self.loader.load()
+        directors = list(loaded["knowledge"]["directors"]["directors"].keys())
+        modes = list(loaded["knowledge"]["visual_modes"]["visual_modes"].keys())
+        style_bible = {
+            "title": story["title"],
+            "director_reference": directors[0],
+            "visual_mode": modes[0],
+            "color_notes": loaded["knowledge"]["directors"]["directors"][directors[0]]["color_palette"],
+            "knowledge_sources": loaded["knowledge_sources"],
+            "knowledge_keys_used": {
+                "directors.directors[0]": directors[0],
+                "visual_modes.visual_modes[0]": modes[0],
+            },
+            "pdf_sources_used": loaded["pdf_sources_used"],
+            "sample_spreads": [
+                {"spread": 1, "left_page": 2, "right_page": 3, "note": "intro mood"},
+                {"spread": 2, "left_page": 4, "right_page": 5, "note": "conflict mood"},
+            ],
+        }
+        (out / "style_bible.json").write_text(json.dumps(style_bible, indent=2), encoding="utf-8")
+
+        page_plan = {
+            "pages": [
+                {
+                    "page_number": p["page_number"],
+                    "text": p["text"],
+                    "scene_description": p["scene_description"],
+                    "spread": (p["page_number"] + 1) // 2,
+                }
+                for p in story["pages"]
+            ],
+            "knowledge_sources": story["knowledge_sources"],
+            "knowledge_keys_used": story["knowledge_keys_used"],
+            "pdf_sources_used": story["pdf_sources_used"],
+        }
+        (out / "page_plan.json").write_text(json.dumps(page_plan, indent=2), encoding="utf-8")
+
+        prompts = {
+            "prompts": [
+                {
+                    "page_number": p["page_number"],
+                    "prompt": f"children's book illustration, {style_bible['director_reference']} inspired, {style_bible['visual_mode']}, {p['scene_description']}",
+                    "caption": p["scene_description"],
+                }
+                for p in story["pages"]
+            ],
+            "knowledge_sources": loaded["knowledge_sources"],
+            "knowledge_keys_used": {
+                "style.director_reference": style_bible["director_reference"],
+                "style.visual_mode": style_bible["visual_mode"],
+            },
+            "pdf_sources_used": loaded["pdf_sources_used"],
+        }
+        (out / "prompts.json").write_text(json.dumps(prompts, indent=2), encoding="utf-8")
+
+        if stop_after == "style":
+            return {"status": "STOPPED_AFTER_STYLE", "out_dir": str(out)}
+
+        trim_w, trim_h = parse_trim_size(size)
+        px_size = (int((trim_w + 0.25) * 300), int((trim_h + 0.25) * 300))
+        illustrations = self.illustrator.generate(prompts["prompts"], images_dir, px_size)
+
+        interior_pdf = out / "interior.pdf"
+        cover_pdf = out / "cover_wrap.pdf"
+        layout_meta = self.layout.render(
+            pages=story["pages"],
+            image_paths=illustrations["images"],
+            output_interior=interior_pdf,
+            output_cover=cover_pdf,
+            size=size,
+            include_page_numbers=False,
+        )
+
+        preflight = self.preflight.run(
+            interior_pdf=interior_pdf,
+            cover_pdf=cover_pdf,
+            image_paths=illustrations["images"],
+            trim_size=size,
+            bleed_in=layout_meta["bleed_in"],
+            safe_margin_in=layout_meta["safe_margin_in"],
+            include_page_numbers=layout_meta["page_numbers"],
+        )
+
+        (out / "preflight_report.json").write_text(json.dumps(preflight, indent=2), encoding="utf-8")
+        return {
+            "status": preflight["status"],
+            "out_dir": str(out),
+            "interior_pdf": str(interior_pdf),
+            "cover_wrap_pdf": str(cover_pdf),
+            "preflight_report": str(out / "preflight_report.json"),
         }
