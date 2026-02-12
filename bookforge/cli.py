@@ -19,6 +19,7 @@ def main() -> None:
     run.add_argument("--size", default="8.5x8.5")
     run.add_argument("--out", required=True)
     run.add_argument("--stop-after", choices=["style"], default=None)
+    run.add_argument("--writer", choices=["full-pipeline", "template"], default="full-pipeline")
 
     args = parser.parse_args()
     pipeline = BookforgePipeline()
@@ -30,7 +31,7 @@ def main() -> None:
         sys.exit(0 if result["status"] == "PASS" else 1)
 
     if args.command == "run":
-        result = pipeline.run(idea=args.idea, pages=args.pages, size=args.size, out_dir=args.out, stop_after=args.stop_after)
+        result = pipeline.run(idea=args.idea, pages=args.pages, size=args.size, out_dir=args.out, stop_after=args.stop_after, writer=args.writer)
         print(json.dumps(result, indent=2))
         sys.exit(0 if result.get("status") in {"PASS", "STOPPED_AFTER_STYLE"} else 1)
 

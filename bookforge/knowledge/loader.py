@@ -14,6 +14,8 @@ class KnowledgeLoader:
         self.repo_root = repo_root or Path(__file__).resolve().parents[2]
         self.knowledge_root = self.repo_root / "knowledge"
         self.pdf_root = self.knowledge_root / "pdfs"
+        self.writing_txt_root = self.pdf_root / "writing_txt"
+        self.style_refs_root = self.knowledge_root / "style_refs"
 
     def load(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {}
@@ -32,13 +34,23 @@ class KnowledgeLoader:
             if p.is_file()
         )
 
-        style_refs_count = len(data.get("directors", {}).get("directors", {})) + len(
-            data.get("visual_modes", {}).get("visual_modes", {})
+        writing_docs = sorted(
+            str(p.relative_to(self.repo_root))
+            for ext in ("*.txt", "*.md")
+            for p in self.writing_txt_root.rglob(ext)
+            if p.is_file()
         )
+
+        style_refs_used = 0
+        if self.style_refs_root.exists():
+            image_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+            style_refs_used = sum(1 for p in self.style_refs_root.rglob("*") if p.is_file() and p.suffix.lower() in image_exts)
 
         return {
             "knowledge": data,
             "knowledge_sources": sources,
             "pdf_sources_used": pdf_sources,
-            "style_refs_count": style_refs_count,
+            "knowledge_docs_used": writing_docs,
+            "style_refs_used": style_refs_used,
+            "style_refs_count": style_refs_used,
         }
