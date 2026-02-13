@@ -15,7 +15,24 @@ class KnowledgeLoader:
         self.knowledge_root = self.repo_root / "knowledge"
         self.pdf_root = self.knowledge_root / "pdfs"
         self.writing_txt_root = self.pdf_root / "writing_txt"
+        self.design_txt_root = self.pdf_root / "design_txt"
         self.style_refs_root = self.knowledge_root / "style_refs"
+
+    def _collect_docs(self, root: Path) -> List[Path]:
+        if not root.exists():
+            return []
+        docs: List[Path] = []
+        for ext in ("*.txt", "*.md"):
+            docs.extend(p for p in root.rglob(ext) if p.is_file())
+        return sorted(set(docs))
+
+    def _read_docs_text(self, docs: List[Path]) -> str:
+        chunks: List[str] = []
+        for path in docs:
+            rel = str(path.relative_to(self.repo_root))
+            text = path.read_text(encoding="utf-8")
+            chunks.append(f"\n\n--- {rel} ---\n{text}")
+        return "".join(chunks).strip()
 
     def load(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {}
@@ -28,18 +45,11 @@ class KnowledgeLoader:
                 data[name.replace(".json", "")] = json.load(f)
             sources.append(str(path.relative_to(self.repo_root)))
 
-        pdf_sources = sorted(
-            str(p.relative_to(self.repo_root))
-            for p in self.pdf_root.glob("*.pdf")
-            if p.is_file()
-        )
+        pdf_sources = sorted(str(p.relative_to(self.repo_root)) for p in self.pdf_root.glob("*.pdf") if p.is_file())
 
-        writing_docs = sorted(
-            str(p.relative_to(self.repo_root))
-            for ext in ("*.txt", "*.md")
-            for p in self.writing_txt_root.rglob(ext)
-            if p.is_file()
-        )
+        writing_docs = self._collect_docs(self.writing_txt_root)
+        design_docs = self._collect_docs(self.design_txt_root)
+        all_docs = sorted({str(p.relative_to(self.repo_root)) for p in writing_docs + design_docs})
 
         style_refs_used = 0
         if self.style_refs_root.exists():
@@ -50,7 +60,9 @@ class KnowledgeLoader:
             "knowledge": data,
             "knowledge_sources": sources,
             "pdf_sources_used": pdf_sources,
-            "knowledge_docs_used": writing_docs,
+            "knowledge_docs_used": all_docs,
+            "writing_docs_text": self._read_docs_text(writing_docs),
+            "design_docs_text": self._read_docs_text(design_docs),
             "style_refs_used": style_refs_used,
             "style_refs_count": style_refs_used,
         }
