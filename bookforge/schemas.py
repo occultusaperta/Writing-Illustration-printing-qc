@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List
 
 
@@ -8,9 +8,9 @@ from typing import Any, Dict, List
 class Provenance:
     knowledge_sources: List[str] = field(default_factory=list)
     knowledge_keys_used: Dict[str, Any] = field(default_factory=dict)
-    pdf_sources_used: List[str] = field(default_factory=list)
     knowledge_docs_used: List[str] = field(default_factory=list)
-    style_refs_used: int = 0
+    pdf_sources_used: List[str] = field(default_factory=list)
+    style_refs_used: List[str] = field(default_factory=list)
 
 
 @dataclass

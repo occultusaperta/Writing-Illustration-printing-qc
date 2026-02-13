@@ -1,0 +1,4 @@
+Design notes:
+- Maintain coherent style references and color palette consistency.
+- Prefer clear silhouettes and scene readability for ages 3-8.
+- Keep visual storytelling aligned with page-turn reveals.
