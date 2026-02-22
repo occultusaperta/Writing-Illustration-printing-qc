@@ -1,111 +1,237 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
+import zipfile
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
-from bookforge.illustration.fal_flux import FalFluxIllustrator, PlaceholderIllustrator
-from bookforge.illustration.openai_images import OpenAIImagesIllustrator
-from bookforge.knowledge.loader import KnowledgeLoader
+from PIL import Image
+
+from bookforge.illustration.fal_flux import FalFluxIllustrator
 from bookforge.layout.pdf import PDFLayoutEngine, parse_trim_size
 from bookforge.qc.kdp_preflight import KDPPreflight
-from bookforge.story.agent import StoryAgent
 
 
 class BookforgePipeline:
     def __init__(self) -> None:
-        self.loader = KnowledgeLoader()
-        self.layout = PDFLayoutEngine()
-        self.preflight = KDPPreflight()
+        self.bleed_in = 0.125
+        self.safe_in = 0.375
+        self.default_steps = 4
+        self.default_page_variants = 2
 
     def doctor(self, strict: bool = False) -> Dict[str, Any]:
-        loaded = self.loader.load()
-        required = [Path(self.loader.knowledge_root / p) for p in self.loader.REQUIRED_JSON]
-        missing = [str(p) for p in required if not p.exists()]
-        can_auto_real = bool(os.getenv("FAL_KEY", "").strip() or os.getenv("OPENAI_API_KEY", "").strip())
-        issues = []
-        if strict:
-            if not can_auto_real:
-                issues.append("auto illustrator would fall back to placeholder; set FAL_KEY or OPENAI_API_KEY")
-            if missing:
-                issues.append("required knowledge json missing")
-        passed = not missing and (not strict or not issues)
-        return {
-            "status": "PASS" if passed else "FAIL",
-            "knowledge_files": loaded["knowledge_sources"],
-            "pdf_count": len(loaded["pdf_sources_used"]),
-            "knowledge_docs_count": len(loaded["knowledge_docs_used"]),
-            "style_refs_count": len(loaded["style_refs_used"]),
-            "missing": missing,
-            "issues": issues,
-            "default_writer": "full-pipeline",
-            "auto_illustrator_real_available": can_auto_real,
-        }
-
-    def _select_illustrator(self, illustrator: str, allow_placeholder: bool):
         fal = bool(os.getenv("FAL_KEY", "").strip())
-        openai = bool(os.getenv("OPENAI_API_KEY", "").strip())
-        if illustrator == "fal":
-            return FalFluxIllustrator(), "fal-flux"
-        if illustrator == "openai":
-            return OpenAIImagesIllustrator(), "openai-images"
-        if illustrator == "placeholder":
-            if not allow_placeholder:
-                raise RuntimeError("Placeholder illustrator requires --allow-placeholder.")
-            return PlaceholderIllustrator(), "placeholder"
-        if fal:
-            return FalFluxIllustrator(), "fal-flux"
-        if openai:
-            return OpenAIImagesIllustrator(), "openai-images"
-        if allow_placeholder:
-            return PlaceholderIllustrator(), "placeholder"
-        raise RuntimeError("No real illustrator configured. Set FAL_KEY or OPENAI_API_KEY, or pass --allow-placeholder.")
+        issues: List[str] = []
+        if not fal:
+            issues.append("FAL_KEY missing")
+        if strict and issues:
+            return {"status": "FAIL", "issues": issues}
+        return {"status": "PASS" if fal else "WARN", "issues": issues, "provider": "fal-flux-only"}
 
-    def run(self, idea: str, pages: int, size: str, out_dir: str, stop_after: str | None = None, writer: str = "full-pipeline", illustrator: str = "auto", allow_placeholder: bool = False) -> Dict[str, Any]:
+    def preprod(self, story_path: str, out_dir: str, size: str, pages: int, variants: int) -> Dict[str, Any]:
         out = Path(out_dir)
-        images_dir = out / "images"
-        out.mkdir(parents=True, exist_ok=True)
+        preprod = out / "preprod"
+        preprod.mkdir(parents=True, exist_ok=True)
 
-        story = StoryAgent(writer=writer).run(idea=idea, pages=pages)
-        (out / "story.md").write_text(story["story_markdown"], encoding="utf-8")
-        (out / "story_metadata.json").write_text(json.dumps({k: story.get(k) for k in ["knowledge_sources", "knowledge_keys_used", "knowledge_docs_used", "pdf_sources_used", "style_refs_used"]}, indent=2), encoding="utf-8")
+        parsed = self._parse_story(Path(story_path), pages)
+        (preprod / "story_parsed.json").write_text(json.dumps(parsed, indent=2), encoding="utf-8")
 
-        loaded = self.loader.load()
-        directors = list(loaded["knowledge"]["directors"]["directors"].keys())
-        modes = list(loaded["knowledge"]["visual_modes"]["visual_modes"].keys())
-        base_prov = {
-            "knowledge_sources": loaded["knowledge_sources"],
-            "knowledge_docs_used": loaded["knowledge_docs_used"],
-            "pdf_sources_used": loaded["pdf_sources_used"],
-            "style_refs_used": loaded["style_refs_used"],
+        character_bible = {
+            "protagonist_name": parsed["title"].split()[0] if parsed["title"] else "Protagonist",
+            "age": "child",
+            "physical_features": {"skin": "warm tan", "hair": "short black curls", "eyes": "brown", "face": "round cheeks"},
+            "wardrobe": "mustard hoodie, denim shorts, white sneakers",
+            "signature_props": ["small satchel"],
+            "expressions_set": ["happy", "worried", "brave", "curious"],
+            "do_not_change": ["same face proportions", "same wardrobe palette", "no age drift"],
         }
+        style_bible = {
+            "visual_mode": "cinematic storybook gouache",
+            "palette": ["#F2C14E", "#3A506B", "#5BC0BE", "#FFFFFF"],
+            "lighting_rules": "soft afternoon bounce light",
+            "line_texture_rules": "painterly brush texture with clean silhouettes",
+            "composition_rules": "medium shots, centered protagonist, subject in safe area",
+            "negative_rules": "NO text, NO watermark, NO extra limbs, NO deformed hands",
+        }
+        (preprod / "character_bible.json").write_text(json.dumps(character_bible, indent=2), encoding="utf-8")
+        (preprod / "style_bible.json").write_text(json.dumps(style_bible, indent=2), encoding="utf-8")
 
-        style_bible = {"title": story["title"], "director_reference": directors[0], "visual_mode": modes[0], "color_notes": loaded["knowledge"]["directors"]["directors"][directors[0]]["color_palette"], "knowledge_keys_used": {"directors.directors[0]": directors[0], "visual_modes.visual_modes[0]": modes[0]}, **base_prov}
-        (out / "style_bible.json").write_text(json.dumps(style_bible, indent=2), encoding="utf-8")
-
-        page_plan = {"pages": [{"page_number": p["page_number"], "text": p["text"], "scene_description": p["scene_description"], "spread": (p["page_number"] + 1) // 2} for p in story["pages"]], "knowledge_keys_used": story["knowledge_keys_used"], **base_prov}
-        (out / "page_plan.json").write_text(json.dumps(page_plan, indent=2), encoding="utf-8")
-
-        prompts = {"prompts": [{"page_number": p["page_number"], "prompt": f"children's book illustration, {style_bible['director_reference']} inspired, {style_bible['visual_mode']}, {p['scene_description']}", "caption": p["scene_description"]} for p in story["pages"]], "knowledge_keys_used": {"style.director_reference": style_bible["director_reference"], "style.visual_mode": style_bible["visual_mode"]}, **base_prov}
-        (out / "prompts.json").write_text(json.dumps(prompts, indent=2), encoding="utf-8")
-
-        if stop_after == "style":
-            return {"status": "STOPPED_AFTER_STYLE", "out_dir": str(out)}
+        char_prompts = {
+            "variants": [
+                {"variant": i, "prompt": f"character sheet, front side and 3 expressions, {character_bible['wardrobe']}, children's premium illustration, variant {i}"}
+                for i in range(1, variants + 1)
+            ]
+        }
+        style_prompts = {
+            "variants": [
+                {"variant": i, "prompt": f"style frame environment shot for {parsed['title']}, {style_bible['visual_mode']}, palette {', '.join(style_bible['palette'])}, variant {i}"}
+                for i in range(1, variants + 1)
+            ]
+        }
+        (preprod / "character_sheet_prompts.json").write_text(json.dumps(char_prompts, indent=2), encoding="utf-8")
+        (preprod / "style_frame_prompts.json").write_text(json.dumps(style_prompts, indent=2), encoding="utf-8")
 
         trim_w, trim_h = parse_trim_size(size)
-        px_size = (int((trim_w + 0.25) * 300), int((trim_h + 0.25) * 300))
-        illustrator_client, provider = self._select_illustrator(illustrator, allow_placeholder)
-        illustrations = illustrator_client.generate(prompts["prompts"], images_dir, px_size)
+        req_w = int((trim_w + 2 * self.bleed_in) * 300)
+        req_h = int((trim_h + 2 * self.bleed_in) * 300)
+        ill = FalFluxIllustrator()
+        for item in char_prompts["variants"]:
+            ill.generate_option_image(item["prompt"], preprod / "character_options" / f"char_v{item['variant']}.png", (req_w, req_h), self.default_steps)
+        for item in style_prompts["variants"]:
+            ill.generate_option_image(item["prompt"], preprod / "style_options" / f"style_v{item['variant']}.png", (req_w, req_h), self.default_steps)
 
-        if provider == "placeholder":
-            prompts["placeholder"] = True
-            (out / "prompts.json").write_text(json.dumps(prompts, indent=2), encoding="utf-8")
+        approval = {"approved": False, "approved_character": "char_v?.png", "approved_style": "style_v?.png", "notes": ""}
+        (preprod / "APPROVAL.json").write_text(json.dumps(approval, indent=2), encoding="utf-8")
+        (preprod / "APPROVAL_INSTRUCTIONS.md").write_text(
+            f"Open the options, pick 1 character + 1 style, edit APPROVAL.json, then run: bookforge lock --out {out_dir}\n",
+            encoding="utf-8",
+        )
+        return {"status": "PASS", "stage": "preprod", "out_dir": str(out)}
 
-        interior_pdf = out / "interior.pdf"
-        cover_pdf = out / "cover_wrap.pdf"
-        layout_meta = self.layout.render(pages=story["pages"], image_paths=illustrations["images"], output_interior=interior_pdf, output_cover=cover_pdf, size=size, include_page_numbers=False)
+    def lock(self, out_dir: str, size: str = "8.5x8.5", page_count: int = 24) -> Dict[str, Any]:
+        out = Path(out_dir)
+        preprod = out / "preprod"
+        approval_path = preprod / "APPROVAL.json"
+        if not approval_path.exists():
+            raise RuntimeError("Missing preprod/APPROVAL.json. Run bookforge preprod first.")
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+        if not approval.get("approved") or "?" in approval.get("approved_character", "") or "?" in approval.get("approved_style", ""):
+            raise RuntimeError("Approval incomplete. Set approved=true and choose approved_character/style in APPROVAL.json.")
 
-        preflight = self.preflight.run(interior_pdf=interior_pdf, cover_pdf=cover_pdf, image_paths=illustrations["images"], trim_size=size, bleed_in=layout_meta["bleed_in"], safe_margin_in=layout_meta["safe_margin_in"], include_page_numbers=layout_meta["page_numbers"])
+        trim_w, trim_h = parse_trim_size(size)
+        lock = {
+            "approved_character": str(preprod / "character_options" / approval["approved_character"]),
+            "approved_style": str(preprod / "style_options" / approval["approved_style"]),
+            "character_bible": json.loads((preprod / "character_bible.json").read_text(encoding="utf-8")),
+            "style_bible": json.loads((preprod / "style_bible.json").read_text(encoding="utf-8")),
+            "locked_prompt_prefix": "premium children's book illustration, keep protagonist consistent with approved character sheet and approved style frame",
+            "locked_negative_prompt": "text, watermark, logo, extra limbs, malformed hands, cropped face, low quality",
+            "config": {
+                "trim": size,
+                "bleed": self.bleed_in,
+                "safe": self.safe_in,
+                "dpi": 300,
+                "fal_endpoint": "https://fal.run/fal-ai/flux/schnell",
+                "steps": self.default_steps,
+                "variants": self.default_page_variants,
+                "page_count": page_count,
+                "required_pixels": [int((trim_w + 2 * self.bleed_in) * 300), int((trim_h + 2 * self.bleed_in) * 300)],
+            },
+        }
+        (out / "LOCK.json").write_text(json.dumps(lock, indent=2), encoding="utf-8")
+        return {"status": "PASS", "lock": str(out / 'LOCK.json')}
+
+    def studio(self, story_path: str, out_dir: str, size: str, pages: int, illustrator: str, require_lock: bool) -> Dict[str, Any]:
+        if illustrator == "openai":
+            raise RuntimeError("OpenAI image provider disabled; Fal/Flux only.")
+        if illustrator not in {"fal", "auto"}:
+            raise RuntimeError("Only Fal/Flux is supported for studio generation.")
+
+        out = Path(out_dir)
+        lock_path = out / "LOCK.json"
+        if require_lock and not lock_path.exists():
+            raise RuntimeError("LOCK.json missing. Run preprod + lock before studio.")
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+
+        trim_w, trim_h = parse_trim_size(size)
+        req_w = int((trim_w + 2 * self.bleed_in) * 300)
+        req_h = int((trim_h + 2 * self.bleed_in) * 300)
+
+        parsed = self._parse_story(Path(story_path), pages)
+        page_plan = {"title": parsed["title"], "author": parsed["author"], "pages": parsed["pages"]}
+        (out / "page_plan.json").write_text(json.dumps(page_plan, indent=2), encoding="utf-8")
+
+        prompts = []
+        for p in parsed["pages"]:
+            scene = p["text"]
+            final_prompt = f"{lock['locked_prompt_prefix']}. Scene: {scene}. Composition: keep key subject inside safe area while background extends to bleed. Negative prompt: {lock['locked_negative_prompt']}"
+            prompts.append({"page_number": p["page_number"], "prompt": final_prompt})
+        (out / "prompts.json").write_text(json.dumps({"prompts": prompts}, indent=2), encoding="utf-8")
+
+        ill = FalFluxIllustrator(endpoint=lock["config"]["fal_endpoint"])
+        variants_out = out / "images" / "variants"
+        generated = ill.generate_page_variants(
+            prompts,
+            variants_out,
+            (req_w, req_h),
+            variants=lock["config"].get("variants", self.default_page_variants),
+            reference_image=Path(lock["approved_character"]),
+            steps=lock["config"].get("steps", self.default_steps),
+        )
+
+        overrides_path = out / "OVERRIDES.json"
+        overrides = json.loads(overrides_path.read_text(encoding="utf-8")) if overrides_path.exists() else {}
+        selected_dir = out / "images"
+        selected_dir.mkdir(parents=True, exist_ok=True)
+        selected: List[str] = []
+        upscaled_pages: List[int] = []
+
+        for page in parsed["pages"]:
+            no = page["page_number"]
+            variant_idx = int(overrides.get(str(no), 1))
+            src = Path(generated["variants"][no][variant_idx - 1])
+            dst = selected_dir / f"page_{no:03d}.png"
+            with Image.open(src) as im:
+                work = im.convert("RGB")
+                if work.width < req_w or work.height < req_h:
+                    work = work.resize((max(req_w, work.width), max(req_h, work.height)), Image.Resampling.LANCZOS)
+                    upscaled_pages.append(no)
+                if work.width != req_w or work.height != req_h:
+                    left = max(0, (work.width - req_w) // 2)
+                    top = max(0, (work.height - req_h) // 2)
+                    work = work.crop((left, top, left + req_w, top + req_h))
+                work.save(dst, format="PNG")
+            selected.append(str(dst))
+
+        engine = PDFLayoutEngine(font_path=Path("assets/fonts/NotoSans-Regular.ttf"))
+        interior = out / "interior.pdf"
+        cover = out / "cover_wrap.pdf"
+        guides = out / "cover_guides.pdf"
+        engine.render_interior(parsed["pages"], selected, interior, size, self.bleed_in, self.safe_in)
+        page_count = len(parsed["pages"])
+        paper_thickness = 0.002252
+        spine_w = max(0.06, page_count * paper_thickness)
+        engine.render_cover_wrap(cover, guides, trim_w, trim_h, self.bleed_in, self.safe_in, page_count, spine_w)
+
+        preflight = KDPPreflight().run(interior, cover, selected, trim_w, trim_h, self.bleed_in, page_count, spine_w, upscaled_pages)
         (out / "preflight_report.json").write_text(json.dumps(preflight, indent=2), encoding="utf-8")
-        return {"status": preflight["status"], "out_dir": str(out), "interior_pdf": str(interior_pdf), "cover_wrap_pdf": str(cover_pdf), "preflight_report": str(out / "preflight_report.json"), "illustrator": provider}
+
+        zip_path = out / "bookforge_package.zip"
+        self._create_package(zip_path, out)
+        return {"status": preflight["status"], "out_dir": str(out), "zip": str(zip_path)}
+
+    def _create_package(self, zip_path: Path, out: Path) -> None:
+        include = ["interior.pdf", "cover_wrap.pdf", "cover_guides.pdf", "preflight_report.json", "LOCK.json", "page_plan.json", "prompts.json"]
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for rel in include:
+                path = out / rel
+                if path.exists():
+                    zf.write(path, arcname=rel)
+            for p in (out / "images").rglob("*.png"):
+                zf.write(p, arcname=str(p.relative_to(out)))
+
+    def _parse_story(self, story_path: Path, pages: int) -> Dict[str, Any]:
+        text = story_path.read_text(encoding="utf-8")
+        title = story_path.stem.replace("_", " ").title()
+        author = "Internal Studio"
+
+        chunks = re.split(r"(?:^|\n)#{1,6}\s*Page\s*\d+[:\-]?", text, flags=re.IGNORECASE)
+        parts = [c.strip() for c in chunks if c.strip()]
+        if len(parts) < 2:
+            parts = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+        if not parts:
+            raise RuntimeError("Story file is empty.")
+
+        per_page: List[str] = []
+        idx = 0
+        for p in range(pages):
+            take = max(1, math.ceil((len(parts) - idx) / max(1, pages - p)))
+            per_page.append(" ".join(parts[idx: idx + take]))
+            idx += take
+            if idx >= len(parts):
+                idx = len(parts)
+        pages_payload = [{"page_number": i + 1, "text": per_page[i]} for i in range(pages)]
+        return {"title": title, "author": author, "pages": pages_payload}
