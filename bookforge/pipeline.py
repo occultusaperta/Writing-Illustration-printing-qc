@@ -85,6 +85,7 @@ class BookforgePipeline:
             "spine_min_in": 0.06,
             "image_steps": 6,
             "page_variants": 2,
+            "fal_endpoint": "https://fal.run/fal-ai/flux/schnell",
             "notes": "",
         }
         (preprod / "APPROVAL.json").write_text(json.dumps(approval, indent=2), encoding="utf-8")
@@ -139,7 +140,7 @@ class BookforgePipeline:
                 "barcode_box_in": cover_preset["barcode_box_in"],
                 "spine_text_min_in": 0.10,
             },
-            "fal": {"endpoint": "https://fal.run/fal-ai/flux/schnell", "steps": int(approval["image_steps"]), "page_variants": int(approval["page_variants"])},
+            "fal": {"endpoint": approval.get("fal_endpoint", "https://fal.run/fal-ai/flux/schnell"), "steps": int(approval["image_steps"]), "page_variants": int(approval["page_variants"])},
         }
         get_preset(lock["interior_layout_preset"], "interior")
         get_preset(lock["typography_preset"], "typography")
