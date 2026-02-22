@@ -1,89 +1,119 @@
 from __future__ import annotations
 
 import base64
+import io
 import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List
 
 import requests
-from PIL import Image, ImageDraw, ImageFont
-
-from bookforge.knowledge.loader import KnowledgeLoader
+from PIL import Image
 
 
 class FalFluxIllustrator:
-    def __init__(self) -> None:
-        self.loader = KnowledgeLoader()
+    """Fal+Flux-only image generator with optional reference-image fallback."""
 
-    def generate(self, prompts: List[Dict[str, Any]], out_dir: Path, image_size_px: tuple[int, int]) -> Dict[str, Any]:
+    def __init__(self, endpoint: str = "https://fal.run/fal-ai/flux/schnell") -> None:
+        self.endpoint = endpoint
+
+    def generate_page_variants(
+        self,
+        page_prompts: List[Dict[str, Any]],
+        variants_dir: Path,
+        image_size_px: tuple[int, int],
+        variants: int = 2,
+        reference_image: Path | None = None,
+        steps: int = 4,
+    ) -> Dict[str, Any]:
         fal_key = os.getenv("FAL_KEY", "").strip()
         if not fal_key:
             raise RuntimeError("FAL_KEY is required for Fal/Flux illustration provider.")
+        variants_dir.mkdir(parents=True, exist_ok=True)
 
-        loaded = self.loader.load()
-        out_dir.mkdir(parents=True, exist_ok=True)
-        images: List[str] = []
-        w, h = image_size_px
-        for p in prompts:
-            prompt = p["prompt"]
-            img_bytes = self._call_fal_flux(prompt=prompt, width=w, height=h, fal_key=fal_key)
-            path = out_dir / f"page_{p['page_number']:03d}.png"
-            path.write_bytes(img_bytes)
-            images.append(str(path))
+        results: Dict[int, List[str]] = {}
+        for entry in page_prompts:
+            page_no = int(entry["page_number"])
+            prompt = entry["prompt"]
+            generated: List[str] = []
+            for variant_idx in range(1, variants + 1):
+                png = self._call_fal_flux(
+                    prompt=prompt,
+                    width=image_size_px[0],
+                    height=image_size_px[1],
+                    fal_key=fal_key,
+                    reference_image=reference_image,
+                    steps=steps,
+                )
+                out = variants_dir / f"page_{page_no:03d}_v{variant_idx}.png"
+                out.write_bytes(png)
+                generated.append(str(out))
+            results[page_no] = generated
+        return {"provider": "fal-flux", "variants": results, "endpoint": self.endpoint}
 
-        return {
-            "provider": "fal-flux",
-            "images": images,
-            "knowledge_sources": loaded["knowledge_sources"],
-            "knowledge_keys_used": {"illustrator.provider": "fal-flux"},
-            "knowledge_docs_used": loaded["knowledge_docs_used"],
-            "pdf_sources_used": loaded["pdf_sources_used"],
-            "style_refs_used": loaded["style_refs_used"],
-        }
+    def generate_option_image(
+        self,
+        prompt: str,
+        out_path: Path,
+        image_size_px: tuple[int, int],
+        steps: int = 4,
+    ) -> None:
+        fal_key = os.getenv("FAL_KEY", "").strip()
+        if not fal_key:
+            raise RuntimeError("FAL_KEY is required for Fal/Flux illustration provider.")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        png = self._call_fal_flux(prompt, image_size_px[0], image_size_px[1], fal_key=fal_key, steps=steps)
+        out_path.write_bytes(png)
 
-    def _call_fal_flux(self, prompt: str, width: int, height: int, fal_key: str) -> bytes:
-        url = "https://fal.run/fal-ai/flux/schnell"
+    def _call_fal_flux(
+        self,
+        prompt: str,
+        width: int,
+        height: int,
+        fal_key: str,
+        reference_image: Path | None = None,
+        steps: int = 4,
+    ) -> bytes:
         headers = {"Authorization": f"Key {fal_key}", "Content-Type": "application/json"}
-        payload = {"prompt": prompt, "image_size": {"width": width, "height": height}, "num_inference_steps": 4}
+        payload: Dict[str, Any] = {
+            "prompt": prompt,
+            "image_size": {"width": width, "height": height},
+            "num_inference_steps": steps,
+        }
+        ref_b64: str | None = None
+        if reference_image and reference_image.exists():
+            with Image.open(reference_image) as ref:
+                rgb = ref.convert("RGB")
+                buff = io.BytesIO()
+                rgb.save(buff, format="PNG")
+                ref_b64 = base64.b64encode(buff.getvalue()).decode("utf-8")
 
-        last_error = None
+        last_error: Exception | None = None
         for attempt in range(1, 4):
             try:
-                r = requests.post(url, headers=headers, json=payload, timeout=120)
-                if r.status_code >= 400:
-                    raise RuntimeError(f"Fal API error ({r.status_code}): {r.text[:300]}")
-                data = r.json()
-                image_b64 = data.get("images", [{}])[0].get("content")
-                image_url = data.get("images", [{}])[0].get("url")
-                if image_b64:
-                    return base64.b64decode(image_b64)
-                if image_url:
-                    img_r = requests.get(image_url, timeout=120)
-                    img_r.raise_for_status()
-                    return img_r.content
-                raise RuntimeError("Fal API response did not include image content.")
+                if ref_b64:
+                    payload_with_ref = dict(payload)
+                    payload_with_ref["image_prompt"] = f"data:image/png;base64,{ref_b64}"
+                    resp = requests.post(self.endpoint, headers=headers, json=payload_with_ref, timeout=120)
+                    if resp.status_code < 400:
+                        return self._extract_image_bytes(resp)
+                resp = requests.post(self.endpoint, headers=headers, json=payload, timeout=120)
+                if resp.status_code >= 400:
+                    raise RuntimeError(f"Fal API error ({resp.status_code}): {resp.text[:300]}")
+                return self._extract_image_bytes(resp)
             except Exception as exc:
                 last_error = exc
                 time.sleep(attempt * 2)
         raise RuntimeError(f"Fal/Flux generation failed after retries: {last_error}")
 
-
-class PlaceholderIllustrator:
-    def generate(self, prompts: List[Dict[str, Any]], out_dir: Path, image_size_px: tuple[int, int]) -> Dict[str, Any]:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        images: List[str] = []
-        for p in prompts:
-            path = out_dir / f"page_{p['page_number']:03d}.png"
-            self._make_placeholder(path, image_size_px, p.get("caption", ""))
-            images.append(str(path))
-        return {"provider": "placeholder", "images": images, "placeholder": True}
-
-    def _make_placeholder(self, path: Path, size: tuple[int, int], caption: str) -> None:
-        width, height = size
-        img = Image.new("RGB", size, color=(248, 248, 248))
-        draw = ImageDraw.Draw(img)
-        draw.rectangle((20, 20, width - 20, height - 20), outline=(180, 0, 0), width=8)
-        draw.text((40, 40), "PLACEHOLDER", fill=(180, 0, 0), font=ImageFont.load_default())
-        draw.text((40, 80), caption[:120], fill=(20, 20, 20), font=ImageFont.load_default())
-        img.save(path, "PNG")
+    def _extract_image_bytes(self, response: requests.Response) -> bytes:
+        data = response.json()
+        image_b64 = data.get("images", [{}])[0].get("content")
+        image_url = data.get("images", [{}])[0].get("url")
+        if image_b64:
+            return base64.b64decode(image_b64)
+        if image_url:
+            img_r = requests.get(image_url, timeout=120)
+            img_r.raise_for_status()
+            return img_r.content
+        raise RuntimeError("Fal API response did not include image content.")

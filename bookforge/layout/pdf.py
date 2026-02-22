@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from reportlab.lib.colors import black, white
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
-
-from bookforge.knowledge.loader import KnowledgeLoader
 
 
 def parse_trim_size(size: str) -> Tuple[float, float]:
@@ -17,61 +17,99 @@ def parse_trim_size(size: str) -> Tuple[float, float]:
 
 
 class PDFLayoutEngine:
-    def __init__(self) -> None:
-        self.loader = KnowledgeLoader()
+    def __init__(self, font_path: Path) -> None:
         self.font_name = "NotoSans"
-        self.font_path = self.loader.repo_root / "assets" / "fonts" / "NotoSans-Regular.ttf"
+        self.font_path = font_path
 
-    def render(self, pages: List[Dict[str, Any]], image_paths: List[str], output_interior: Path, output_cover: Path, size: str, include_page_numbers: bool = False) -> Dict[str, Any]:
-        loaded = self.loader.load()
+    def render_interior(
+        self,
+        pages: List[Dict[str, Any]],
+        image_paths: List[str],
+        output_interior: Path,
+        size: str,
+        bleed_in: float,
+        safe_margin_in: float,
+    ) -> Dict[str, Any]:
         trim_w, trim_h = parse_trim_size(size)
-        bleed = 0.125
-        safe_margin = 0.375
-        page_w = (trim_w + bleed * 2) * 72
-        page_h = (trim_h + bleed * 2) * 72
-
-        if self.font_path.exists():
-            pdfmetrics.registerFont(TTFont(self.font_name, str(self.font_path)))
+        page_w = (trim_w + bleed_in * 2) * 72
+        page_h = (trim_h + bleed_in * 2) * 72
+        pdfmetrics.registerFont(TTFont(self.font_name, str(self.font_path)))
 
         c = canvas.Canvas(str(output_interior), pagesize=(page_w, page_h), pageCompression=0)
-        c.setAuthor("bookforge")
-        c.setTitle("BookForge Interior")
+        c.setAuthor("KDP Premium Studio")
+        c.setTitle("Interior")
 
-        safe_x = bleed * 72 + safe_margin * 72
-        safe_y = bleed * 72 + safe_margin * 72
-        safe_w = trim_w * 72 - 2 * safe_margin * 72
-        safe_h = trim_h * 72 - 2 * safe_margin * 72
+        safe_x = (bleed_in + safe_margin_in) * 72
+        safe_y = (bleed_in + safe_margin_in) * 72
+        safe_w = (trim_w - 2 * safe_margin_in) * 72
+        safe_h = (trim_h - 2 * safe_margin_in) * 72
 
-        for i, (page, img_path) in enumerate(zip(pages, image_paths), start=1):
+        for page, img_path in zip(pages, image_paths):
             img = ImageReader(img_path)
-            c.drawImage(img, safe_x, safe_y + 56, safe_w, safe_h - 56, preserveAspectRatio=True, anchor="c")
-            c.setFont(self.font_name if self.font_path.exists() else "Times-Roman", 12)
-            c.drawString(safe_x, safe_y + 36, page["text"][:130])
-            if include_page_numbers:
-                c.setFont(self.font_name if self.font_path.exists() else "Times-Roman", 10)
-                c.drawRightString(page_w - safe_x, safe_y + 14, str(i))
+            c.drawImage(img, 0, 0, page_w, page_h, preserveAspectRatio=True, anchor="c")
+
+            panel_h = min(140, safe_h * 0.35)
+            panel_y = safe_y
+            c.setFillColorRGB(1, 1, 1, alpha=0.88)
+            c.roundRect(safe_x, panel_y, safe_w, panel_h, 10, stroke=0, fill=1)
+            c.setFillColor(black)
+
+            font_size = 20
+            leading = 1.25
+            wrapped: List[str] = []
+            raw_text = page["text"].strip()
+            while font_size >= 10:
+                max_chars = max(20, int(safe_w / (font_size * 0.45)))
+                wrapped = textwrap.wrap(raw_text, width=max_chars)
+                if len(wrapped) * (font_size * leading) <= panel_h - 18:
+                    break
+                font_size -= 1
+            if font_size < 10:
+                raise RuntimeError(f"Text overflow could not be resolved on page {page['page_number']}.")
+
+            c.setFont(self.font_name, font_size)
+            text_y = panel_y + panel_h - (font_size + 10)
+            for line in wrapped:
+                c.drawString(safe_x + 12, text_y, line)
+                text_y -= font_size * leading
             c.showPage()
+
+        c.save()
+        return {"page_dimensions_pt": [page_w, page_h]}
+
+    def render_cover_wrap(
+        self,
+        output_cover: Path,
+        output_guides: Path,
+        trim_w: float,
+        trim_h: float,
+        bleed_in: float,
+        safe_margin_in: float,
+        page_count: int,
+        spine_w: float,
+    ) -> Dict[str, Any]:
+        cover_w = 2 * trim_w + spine_w + 2 * bleed_in
+        cover_h = trim_h + 2 * bleed_in
+        w_pt = cover_w * 72
+        h_pt = cover_h * 72
+
+        c = canvas.Canvas(str(output_cover), pagesize=(w_pt, h_pt), pageCompression=0)
+        c.setTitle("Cover Wrap")
+        c.setFont(self.font_name, 18)
+        c.drawString((trim_w + bleed_in + spine_w) * 72 + 24, h_pt - 56, "Front Cover")
+        c.drawString(24, h_pt - 56, "Back Cover")
+        barcode_w, barcode_h = 2.0 * 72, 1.2 * 72
+        c.setFillColor(white)
+        c.rect(bleed_in * 72 + 24, bleed_in * 72 + 24, barcode_w, barcode_h, stroke=0, fill=1)
+        c.setFillColor(black)
         c.save()
 
-        cover_w = (trim_w * 2 + 0.25 + bleed * 2) * 72
-        cover_h = (trim_h + bleed * 2) * 72
-        cc = canvas.Canvas(str(output_cover), pagesize=(cover_w, cover_h), pageCompression=0)
-        cc.setFont(self.font_name if self.font_path.exists() else "Times-Roman", 24)
-        cc.drawString(72, cover_h - 96, "BookForge Cover Wrap")
-        cc.setFont(self.font_name if self.font_path.exists() else "Times-Roman", 12)
-        cc.drawString(72, cover_h - 120, "Front + Back + spine area")
-        cc.rect(36, 36, cover_w - 72, cover_h - 72)
-        cc.save()
+        g = canvas.Canvas(str(output_guides), pagesize=(w_pt, h_pt), pageCompression=0)
+        g.setTitle("Cover Guides")
+        g.rect(bleed_in * 72, bleed_in * 72, (2 * trim_w + spine_w) * 72, trim_h * 72)
+        g.rect((bleed_in + safe_margin_in) * 72, (bleed_in + safe_margin_in) * 72, (2 * trim_w + spine_w - 2 * safe_margin_in) * 72, (trim_h - 2 * safe_margin_in) * 72)
+        g.line((bleed_in + trim_w) * 72, bleed_in * 72, (bleed_in + trim_w) * 72, (bleed_in + trim_h) * 72)
+        g.line((bleed_in + trim_w + spine_w) * 72, bleed_in * 72, (bleed_in + trim_w + spine_w) * 72, (bleed_in + trim_h) * 72)
+        g.save()
 
-        return {
-            "trim_size": size,
-            "bleed_in": bleed,
-            "safe_margin_in": safe_margin,
-            "page_dimensions_pt": [page_w, page_h],
-            "page_numbers": include_page_numbers,
-            "knowledge_sources": loaded["knowledge_sources"],
-            "knowledge_docs_used": loaded["knowledge_docs_used"],
-            "pdf_sources_used": loaded["pdf_sources_used"],
-            "style_refs_used": loaded["style_refs_used"],
-            "knowledge_keys_used": {"layout.font": self.font_name, "layout.font_path": str(self.font_path.relative_to(self.loader.repo_root))},
-        }
+        return {"cover_w_in": cover_w, "cover_h_in": cover_h}
