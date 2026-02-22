@@ -23,8 +23,8 @@ class PDFLayoutEngine:
         self.font_path = font_path
         try:
             pdfmetrics.registerFont(TTFont(self.font_name, str(self.font_path)))
-        except Exception:
-            self.font_name = "Helvetica"
+        except Exception as exc:
+            raise RuntimeError("Font embed failed. Ensure assets/fonts/NotoSans-Regular.ttf exists and is a valid TTF.") from exc
 
     def render_interior(self, pages: List[Dict[str, Any]], image_paths: List[str], output_interior: Path, size: str, bleed_in: float, safe_margin_in: float, layout_preset: Dict[str, Any], typography_preset: Dict[str, Any]) -> Dict[str, Any]:
         trim_w, trim_h = parse_trim_size(size)
@@ -89,13 +89,13 @@ class PDFLayoutEngine:
                 blur = im.convert("RGB").filter(ImageFilter.GaussianBlur(radius=6))
                 tmp = output_cover.parent / ".tmp_style_blur.jpg"
                 blur.save(tmp)
-                c.drawImage(ImageReader(str(tmp)), back_x, panel_y, trim_w * 72, panel_h, preserveAspectRatio=True, anchor="c")
+                c.drawImage(ImageReader(str(tmp)), 0, 0, w_pt, h_pt, preserveAspectRatio=True, anchor="c")
                 tmp.unlink(missing_ok=True)
         else:
             c.setFillColorRGB(0.94, 0.93, 0.9)
-            c.rect(back_x, panel_y, trim_w * 72, panel_h, stroke=0, fill=1)
+            c.rect(0, 0, w_pt, h_pt, stroke=0, fill=1)
 
-        c.drawImage(ImageReader(str(approved_cover)), front_x - bleed_in * 72, 0, (trim_w + bleed_in) * 72 + bleed_in * 72, h_pt, preserveAspectRatio=True, anchor="c")
+        c.drawImage(ImageReader(str(approved_cover)), front_x, 0, (trim_w + bleed_in) * 72, h_pt, preserveAspectRatio=True, anchor="c")
         c.setFillColor(black)
         if cover_preset["title_placement"] == "front_top":
             c.setFont(self.font_name, 30)
@@ -128,7 +128,13 @@ class PDFLayoutEngine:
         g.line(spine_x, panel_y, spine_x, panel_y + panel_h)
         g.line(front_x, panel_y, front_x, panel_y + panel_h)
         g.save()
-        return {"cover_w_in": cover_w, "cover_h_in": cover_h}
+        return {
+            "cover_w_in": cover_w,
+            "cover_h_in": cover_h,
+            "back_background_rect_pt": [0, 0, w_pt, h_pt],
+            "front_art_rect_pt": [front_x, 0, (trim_w + bleed_in) * 72, h_pt],
+            "spine_rect_pt": [spine_x, panel_y, spine_w * 72, panel_h],
+        }
 
     def render_interior_preview(self, out_pdf: Path, size: str, bleed_in: float, safe_margin_in: float, preset: Any) -> None:
         out_pdf.parent.mkdir(parents=True, exist_ok=True)

@@ -18,9 +18,9 @@ bookforge studio --story examples/sample_story.md --out dist/run --size 8.5x8.5 
 - Story parse + bible variants (`preprod/bible_variants/v1..vN`)
 - Fal/Flux option images: character, style, cover concept
 - Layout and typography option catalog + preview PDFs
-- Single approval gate file: `preprod/APPROVAL.json`
+- Single approval gate file: `preprod/APPROVAL.json` (includes `fal_endpoint`, defaulting to `https://fal.run/fal-ai/flux/schnell`).
 
 ## Lock + Studio guarantees
-- `LOCK.json` freezes character/style/cover choices, prompt prefix, negative prompt, layout, typography, cover layout, print geometry, and Fal config.
+- `LOCK.json` freezes character/style/cover choices, prompt prefix, negative prompt, layout, typography, cover layout, print geometry, and Fal config. You can switch `fal_endpoint` in approval to a higher-quality Fal endpoint (if available in your account) before locking.
 - Studio refuses OpenAI images with exact error: `OpenAI image provider disabled; Fal/Flux only.`
 - Studio renders premium interior + cover wrap + guides, runs strict preflight, and builds `bookforge_package.zip`.
