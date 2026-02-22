@@ -40,7 +40,7 @@ class TemplateStoryWriter:
             },
             pdf_sources_used=loaded["pdf_sources_used"],
             knowledge_docs_used=loaded["knowledge_docs_used"],
-            style_refs_used=loaded["style_refs_used"],
+            style_refs_used=loaded.get("style_refs_used", []),
         )
 
     def _beats(self, idea: str, pages: int) -> List[str]:

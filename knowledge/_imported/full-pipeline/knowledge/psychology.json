@@ -1,0 +1,42 @@
+{
+  "age_groups": {
+    "ages_0_3": {
+      "name": "Babies and Toddlers",
+      "cognitive_level": "Sensory exploration, cause and effect",
+      "attention_span": "Very short (1-5 minutes)",
+      "language": "Simple words, repetition, rhythmic patterns",
+      "themes": ["daily routines", "family", "animals", "sensory experiences"],
+      "visual_preferences": ["high contrast", "simple shapes", "familiar objects"]
+    },
+    "ages_3_5": {
+      "name": "Preschool",
+      "cognitive_level": "Imaginative play, basic logic",
+      "attention_span": "Short (5-10 minutes)",
+      "language": "Simple sentences, descriptive words, questions",
+      "themes": ["friendship", "emotions", "adventure", "problem-solving"],
+      "visual_preferences": ["bright colors", "expressive characters", "clear scenes"]
+    },
+    "ages_5_7": {
+      "name": "Early Elementary",
+      "cognitive_level": "Concrete thinking, emerging reading skills",
+      "attention_span": "Moderate (10-15 minutes)",
+      "language": "Longer sentences, vocabulary building, dialogue",
+      "themes": ["overcoming challenges", "self-discovery", "helping others", "learning"],
+      "visual_preferences": ["detailed illustrations", "action", "relatable situations"]
+    },
+    "ages_7_9": {
+      "name": "Elementary",
+      "cognitive_level": "Logical reasoning, empathy development",
+      "attention_span": "Good (15-30 minutes)",
+      "language": "Complex sentences, humor, wordplay",
+      "themes": ["independence", "identity", "social dynamics", "curiosity"],
+      "visual_preferences": ["engaging compositions", "expressive details", "visual storytelling"]
+    }
+  },
+  "emotional_development": {
+    "security_needs": "Stories that provide comfort and predictability",
+    "growth_mindset": "Characters that learn from mistakes",
+    "empathy_building": "Different perspectives and feelings",
+    "self_regulation": "Managing emotions and behavior"
+  }
+}
