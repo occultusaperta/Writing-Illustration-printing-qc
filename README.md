@@ -1,45 +1,26 @@
-# BookForge v2 Pipeline (No Stubs by Default)
+# BookForge CLI (Fal/Flux-only, lock-gated)
 
-End-to-end local pipeline:
+## Requirements
+- Python 3.9+
+- `FAL_KEY` is required for any image generation (`preprod`, `studio`).
+- `OPENAI_API_KEY` is optional and used for **text-only** story cue extraction.
 
-IDEA/TEXT → STORY → PAGE PLAN → REAL IMAGE PROVIDER (Fal/Flux or OpenAI Images) → KDP-oriented interior PDF + cover wrap PDF + preflight report.
-
-## Commands
-
+## Golden Path
 ```bash
-python -m bookforge doctor
-python -m bookforge doctor --strict
-python -m bookforge run --idea "a brave little kite" --pages 24 --size 8.5x8.5 --out dist/run1
-python -m bookforge run --idea "a brave little kite" --pages 24 --size 8.5x8.5 --out dist/style --stop-after style
+bookforge doctor --strict
+bookforge preprod --story examples/sample_story.md --out dist/run --size 8.5x8.5 --pages 24 --variants 4
+# edit dist/run/preprod/APPROVAL.json and set approved=true
+bookforge lock --out dist/run --size 8.5x8.5 --pages 24
+bookforge studio --story examples/sample_story.md --out dist/run --size 8.5x8.5 --pages 24 --illustrator fal --require-lock
 ```
 
-## How to run
+## Preprod outputs
+- Story parse + bible variants (`preprod/bible_variants/v1..vN`)
+- Fal/Flux option images: character, style, cover concept
+- Layout and typography option catalog + preview PDFs
+- Single approval gate file: `preprod/APPROVAL.json`
 
-```bash
-export FAL_KEY=...  # preferred
-# OR
-export OPENAI_API_KEY=...
-
-python -m bookforge run --idea "a brave little kite" --pages 24 --size 8.5x8.5 --out dist/run1
-```
-
-Use placeholders only when explicitly requested:
-
-```bash
-python -m bookforge run --idea "a brave little kite" --pages 24 --out dist/placeholder --illustrator placeholder --allow-placeholder
-```
-
-## Output files
-
-- `style_bible.json`
-- `story.md`
-- `story_metadata.json`
-- `page_plan.json`
-- `prompts.json`
-- `images/page_001.png ...`
-- `interior.pdf`
-- `cover_wrap.pdf`
-- `preflight_report.json`
-
-All JSON artifacts include provenance keys:
-`knowledge_sources`, `knowledge_keys_used`, `knowledge_docs_used`, `pdf_sources_used`, `style_refs_used`.
+## Lock + Studio guarantees
+- `LOCK.json` freezes character/style/cover choices, prompt prefix, negative prompt, layout, typography, cover layout, print geometry, and Fal config.
+- Studio refuses OpenAI images with exact error: `OpenAI image provider disabled; Fal/Flux only.`
+- Studio renders premium interior + cover wrap + guides, runs strict preflight, and builds `bookforge_package.zip`.
