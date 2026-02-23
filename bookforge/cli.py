@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import subprocess
 import sys
+from pathlib import Path
 
 from bookforge.pipeline import BookforgePipeline
 
@@ -38,6 +41,10 @@ def main() -> None:
     verify = sub.add_parser("verify", help="Validate studio artifacts and package contents")
     verify.add_argument("--out", required=True)
 
+    ui = sub.add_parser("ui", help="Launch local Streamlit UI")
+    ui.add_argument("--host", default="127.0.0.1")
+    ui.add_argument("--port", type=int, default=8501)
+
     args = parser.parse_args()
     pipeline = BookforgePipeline()
 
@@ -52,6 +59,33 @@ def main() -> None:
             result = pipeline.studio(args.story, args.out, args.size, args.pages, args.illustrator, args.require_lock)
         elif args.command == "verify":
             result = pipeline.verify(args.out)
+        elif args.command == "ui":
+            if importlib.util.find_spec("streamlit") is None:
+                print("UI extras not installed. Run: pip install -e '.[ui]'")
+                sys.exit(1)
+            cmd = [
+                "streamlit",
+                "run",
+                "-m",
+                "bookforge.ui.app",
+                "--server.address",
+                args.host,
+                "--server.port",
+                str(args.port),
+            ]
+            proc = subprocess.run(cmd)
+            if proc.returncode != 0:
+                fallback = [
+                    "streamlit",
+                    "run",
+                    str((Path(__file__).parent / "ui" / "app.py").resolve()),
+                    "--server.address",
+                    args.host,
+                    "--server.port",
+                    str(args.port),
+                ]
+                proc = subprocess.run(fallback)
+            sys.exit(proc.returncode)
         else:
             parser.print_help()
             sys.exit(1)

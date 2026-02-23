@@ -14,6 +14,12 @@ bookforge lock --out dist/run --size 8.5x8.5 --pages 24
 bookforge studio --story examples/sample_story.md --out dist/run --size 8.5x8.5 --pages 24 --illustrator fal --require-lock
 ```
 
+## UI Quickstart
+```bash
+pip install -e ".[ui]"
+bookforge ui
+```
+
 ## Preprod outputs
 - Story parse + bible variants (`preprod/bible_variants/v1..vN`)
 - Fal/Flux option images: character, style, cover concept
