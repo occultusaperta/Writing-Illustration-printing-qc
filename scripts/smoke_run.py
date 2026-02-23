@@ -38,10 +38,27 @@ def main() -> int:
     approval["approved_cover"] = f"cover_concept_v{variant}.png"
     approval["checkpoint_pages"] = 0
     approval["qa_profile"] = "platinum"
+    approval["spread_mode"] = "custom_pairs"
+    approval["spread_pairs"] = [[2, 3]]
     approval["fal_endpoint"] = approval.get("fal_endpoint", "https://fal.run/fal-ai/flux/schnell")
     PREPROD_APPROVAL.write_text(json.dumps(approval, indent=2), encoding="utf-8")
 
     run(["bookforge", "lock", "--out", str(OUT_DIR), "--size", "8.5x8.5", "--pages", "8"])
+    (OUT_DIR / "CHECKPOINT.json").write_text(
+        json.dumps(
+            {
+                "approved": True,
+                "notes": "smoke override",
+                "overrides": {
+                    "page_prompt_addendum": {"3": "make it brighter"},
+                    "force_regen": [5],
+                    "variant_preference": {"7": 2},
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     run(["bookforge", "studio", "--story", "examples/sample_story.md", "--out", str(OUT_DIR), "--size", "8.5x8.5", "--pages", "8", "--illustrator", "fal", "--require-lock"])
 
     expected = [
@@ -66,6 +83,12 @@ def main() -> int:
     if preflight.get("status") == "FAIL":
         print("Smoke run failed: preflight status is FAIL")
         return 1
+
+    if approval.get("spread_mode", "none") != "none":
+        spread_preview = OUT_DIR / "review" / "spread_preview.pdf"
+        if not spread_preview.exists():
+            print("Smoke run failed; spread preview missing for spread-enabled config")
+            return 1
 
     print("Smoke run complete:")
     print(f"- out: {OUT_DIR}")

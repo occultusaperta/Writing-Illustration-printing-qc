@@ -4,7 +4,7 @@ import json
 import math
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from PIL import Image, ImageDraw
 
@@ -16,6 +16,75 @@ from bookforge.qc.kdp_preflight import KDPPreflight
 from bookforge.review.contact_sheet import generate_contact_sheet
 from bookforge.story.story_spec import build_bible_variants, parse_story
 from bookforge.story.storyboard import generate_storyboard
+
+
+
+def _parse_spread_pairs(spreads: Dict[str, Any], page_count: int) -> List[Tuple[int, int]]:
+    mode = spreads.get("mode", "none")
+    if mode == "none":
+        return []
+    if mode == "every_4":
+        return [(p, p + 1) for p in range(4, page_count, 4) if p + 1 <= page_count]
+    if mode != "custom_pairs":
+        raise RuntimeError(f"Unsupported spread mode: {mode}")
+
+    pairs = spreads.get("pairs", [])
+    if not isinstance(pairs, list):
+        raise RuntimeError("Spread pairs must be a list of [left,right] page numbers.")
+    parsed: List[Tuple[int, int]] = []
+    used_pages: set[int] = set()
+    for pair in pairs:
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise RuntimeError("Each spread pair must contain exactly two page numbers.")
+        left, right = int(pair[0]), int(pair[1])
+        if right != left + 1:
+            raise RuntimeError(f"Spread pair [{left}, {right}] is not consecutive.")
+        if left < 1 or right > page_count:
+            raise RuntimeError(f"Spread pair [{left}, {right}] is out of page range 1..{page_count}.")
+        if left in used_pages or right in used_pages:
+            raise RuntimeError(f"Spread pair [{left}, {right}] overlaps another spread pair.")
+        used_pages.update({left, right})
+        parsed.append((left, right))
+    return sorted(parsed)
+
+
+def _apply_checkpoint_overrides(prompts: List[Dict[str, Any]], checkpoint_payload: Dict[str, Any] | None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    payload = checkpoint_payload or {}
+    overrides = payload.get("overrides") if payload.get("approved") else {}
+    if not isinstance(overrides, dict):
+        overrides = {}
+
+    addendum_raw = overrides.get("page_prompt_addendum", {})
+    addendum_map = {int(k): str(v) for k, v in addendum_raw.items()} if isinstance(addendum_raw, dict) else {}
+    force_regen_raw = overrides.get("force_regen", [])
+    force_regen = sorted({int(p) for p in force_regen_raw}) if isinstance(force_regen_raw, list) else []
+    pref_raw = overrides.get("variant_preference", {})
+    variant_pref = {int(k): int(v) for k, v in pref_raw.items()} if isinstance(pref_raw, dict) else {}
+
+    merged = []
+    for item in prompts:
+        page_no = int(item["page_number"])
+        prompt = item["prompt"]
+        if page_no in addendum_map:
+            prompt = f"{prompt} {addendum_map[page_no]}".strip()
+        merged.append({"page_number": page_no, "prompt": prompt})
+
+    return merged, {
+        "approved": bool(payload.get("approved", False)),
+        "notes": str(payload.get("notes", "")),
+        "page_prompt_addendum": {str(k): v for k, v in sorted(addendum_map.items())},
+        "force_regen": force_regen,
+        "variant_preference": {str(k): v for k, v in sorted(variant_pref.items())},
+    }
+
+
+def _order_variants(variant_paths: List[Path], preferred_variant: int | None) -> List[Path]:
+    if not preferred_variant:
+        return variant_paths
+    preferred_token = f"_v{preferred_variant}.png"
+    preferred = [p for p in variant_paths if p.name.endswith(preferred_token)]
+    others = [p for p in variant_paths if p not in preferred]
+    return preferred + others
 
 
 class BookforgePipeline:
@@ -111,7 +180,7 @@ class BookforgePipeline:
             "page_variants": 2,
             "fal_endpoint": "https://fal.run/fal-ai/flux/schnell",
             "spread_mode": "none",
-            "spread_pages": [],
+            "spread_pairs": [],
             "checkpoint_pages": 2,
             "qa_profile": "platinum",
             "max_regen_rounds": 2,
@@ -170,9 +239,19 @@ class BookforgePipeline:
             "cover": {"paper_thickness_in": float(approval["paper_thickness_in"]), "spine_min_in": float(approval["spine_min_in"]), "spine_w_in": spine_w, "barcode_box_in": cover_preset["barcode_box_in"], "spine_text_min_in": 0.10},
             "fal": {"endpoint": approval.get("fal_endpoint", "https://fal.run/fal-ai/flux/schnell"), "steps": int(approval["image_steps"]), "page_variants": int(approval["page_variants"])},
             "qa": {k: approval[k] for k in ["qa_profile", "max_regen_rounds", "min_sharpness", "min_entropy", "min_contrast", "max_border_bar_score", "min_style_hist_similarity", "max_page_to_page_hist_drift"]},
-            "spreads": {"mode": approval.get("spread_mode", "none"), "pages": approval.get("spread_pages", [])},
+            "spreads": {
+                "mode": approval.get("spread_mode", "none"),
+                "pairs": approval.get("spread_pairs", []),
+            },
             "checkpoint": {"pages": int(approval.get("checkpoint_pages", 2))},
         }
+        if not lock["spreads"]["pairs"] and approval.get("spread_pages"):
+            pages = approval.get("spread_pages", [])
+            if isinstance(pages, list) and len(pages) >= 2:
+                lock["spreads"]["mode"] = "custom_pairs"
+                lock["spreads"]["pairs"] = [[int(pages[0]), int(pages[1])]]
+
+        _parse_spread_pairs(lock["spreads"], page_count)
         (out / "LOCK.json").write_text(json.dumps(lock, indent=2), encoding="utf-8")
         return {"status": "PASS", "lock": str(out / "LOCK.json")}
 
@@ -204,7 +283,6 @@ class BookforgePipeline:
             sfx = f" camera:{sb.get('camera','medium')} emotion:{sb.get('emotion','warm')} setting:{sb.get('setting','storybook world')}"
             prompt = f"{lock['locked_prompt_prefix']} Scene: {p['text']}. {sfx}. {lock['locked_negative_prompt']}"
             prompts.append({"page_number": p["page_number"], "prompt": prompt})
-        (out / "prompts.json").write_text(json.dumps({"prompts": prompts}, indent=2), encoding="utf-8")
 
         checkpoint_pages = int(lock.get("checkpoint", {}).get("pages", 0))
         check_file = out / "CHECKPOINT.json"
@@ -228,6 +306,10 @@ class BookforgePipeline:
             (out / "CHECKPOINT.json").write_text(json.dumps({"approved": False, "notes": "", "overrides": {}}, indent=2), encoding="utf-8")
             return {"status": "STOPPED_CHECKPOINT", "out_dir": str(out)}
 
+        checkpoint_payload = json.loads(check_file.read_text(encoding="utf-8")) if check_file.exists() else {}
+        prompts, checkpoint_summary = _apply_checkpoint_overrides(prompts, checkpoint_payload)
+        (out / "prompts.json").write_text(json.dumps({"prompts": prompts, "checkpoint": checkpoint_summary}, indent=2), encoding="utf-8")
+
         ill = FalFluxIllustrator(endpoint=lock["fal"]["endpoint"])
         generated = ill.generate_page_variants(
             prompts,
@@ -244,18 +326,24 @@ class BookforgePipeline:
         selected_dir = out / "images"
         selected_dir.mkdir(parents=True, exist_ok=True)
         prev_ref = None
+        force_regen_set = {int(p) for p in checkpoint_summary.get("force_regen", [])}
+        variant_pref = {int(k): int(v) for k, v in checkpoint_summary.get("variant_preference", {}).items()}
+
         for page in parsed["pages"]:
             no = page["page_number"]
-            variant_paths = [Path(p) for p in generated["variants"][no]]
+            variant_paths = _order_variants([Path(p) for p in generated["variants"][no]], variant_pref.get(no))
             best_path, qa = choose_best_variant(variant_paths, lock["qa"], Path(lock["approved_style"]), prev_ref)
             qa_attempts.append({"page": no, "attempt": 1, **qa})
             rounds = 0
             hard_prompt = prompts[no - 1]["prompt"]
-            while not qa["passes"] and rounds < lock["qa"]["max_regen_rounds"]:
+            needs_forced_regen = no in force_regen_set
+            while ((not qa["passes"]) or needs_forced_regen) and rounds < lock["qa"]["max_regen_rounds"]:
                 rounds += 1
+                needs_forced_regen = False
                 hard_prompt += " single main character only, hands fully visible, no extra characters, clean anatomy"
                 regen = ill.generate_page_variants([{"page_number": no, "prompt": hard_prompt}], out / "images" / "variants", (req_w, req_h), lock["fal"]["page_variants"], Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"])
-                best_path, qa = choose_best_variant([Path(p) for p in regen["variants"][no]], lock["qa"], Path(lock["approved_style"]), prev_ref)
+                regen_variants = _order_variants([Path(p) for p in regen["variants"][no]], variant_pref.get(no))
+                best_path, qa = choose_best_variant(regen_variants, lock["qa"], Path(lock["approved_style"]), prev_ref)
                 qa_attempts.append({"page": no, "attempt": rounds + 1, **qa})
 
             dst = selected_dir / f"page_{no:03d}.png"
@@ -273,12 +361,28 @@ class BookforgePipeline:
             selected.append(str(dst))
             prev_ref = dst
 
-        if lock.get("spreads", {}).get("mode") == "custom" and lock.get("spreads", {}).get("pages"):
-            a, b = lock["spreads"]["pages"][:2]
+        spread_pairs = _parse_spread_pairs(lock.get("spreads", {}), len(parsed["pages"]))
+        for a, b in spread_pairs:
             spread_prompt = prompts[a - 1]["prompt"] + " panoramic double-page spread"
-            spread = ill.generate_page_variants([{"page_number": a, "prompt": spread_prompt}], out / "images" / "variants", (req_w * 2, req_h), 1, Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"])
-            spread_path = Path(spread["variants"][a][0])
-            self._split_spread(spread_path, Path(selected[a - 1]), Path(selected[b - 1]))
+            spread_ok = False
+            spread_round = 0
+            spread_path: Path | None = None
+            while not spread_ok and spread_round <= lock["qa"]["max_regen_rounds"]:
+                spread_round += 1
+                spread = ill.generate_page_variants([{"page_number": a, "prompt": spread_prompt}], out / "images" / "variants", (req_w * 2, req_h), 1, Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"])
+                spread_path = Path(spread["variants"][a][0])
+                _, spread_qa = choose_best_variant([spread_path], lock["qa"], Path(lock["approved_style"]), None)
+                qa_attempts.append({"page": f"{a}-{b}", "attempt": spread_round, "spread": True, **spread_qa})
+                if not spread_qa["passes"]:
+                    continue
+                self._split_spread(spread_path, Path(selected[a - 1]), Path(selected[b - 1]))
+                left_best, left_qa = choose_best_variant([Path(selected[a - 1])], lock["qa"], Path(lock["approved_style"]), Path(selected[a - 2]) if a > 1 else None)
+                right_best, right_qa = choose_best_variant([Path(selected[b - 1])], lock["qa"], Path(lock["approved_style"]), Path(selected[a - 1]))
+                qa_attempts.append({"page": a, "attempt": spread_round, "spread_half": "left", **left_qa})
+                qa_attempts.append({"page": b, "attempt": spread_round, "spread_half": "right", **right_qa})
+                spread_ok = bool(left_qa["passes"] and right_qa["passes"])
+            if not spread_ok:
+                raise RuntimeError(f"Spread QA failed for pair [{a}, {b}] after regeneration rounds.")
 
         engine = PDFLayoutEngine(font_path=Path("assets/fonts/NotoSans-Regular.ttf"))
         trim_w, trim_h = parse_trim_size(size)
@@ -293,8 +397,8 @@ class BookforgePipeline:
 
         review = out / "review"
         generate_contact_sheet([Path(p) for p in selected], review / "contact_sheet.pdf")
-        write_qa_report(review / "qa_report.json", {"attempts": qa_attempts, "profile": lock["qa"]})
-        if lock.get("spreads", {}).get("mode") != "none":
+        write_qa_report(review / "qa_report.json", {"attempts": qa_attempts, "profile": lock["qa"], "checkpoint_overrides_applied": checkpoint_summary})
+        if spread_pairs:
             generate_contact_sheet([Path(p) for p in selected], review / "spread_preview.pdf", columns=2)
 
         zip_path = out / "bookforge_package.zip"

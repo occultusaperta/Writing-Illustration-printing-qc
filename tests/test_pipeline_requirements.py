@@ -3,16 +3,18 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
+from reportlab.lib.colors import black, white
 
 from bookforge.layout.pdf import PDFLayoutEngine
 from bookforge.layout.presets import COVER_LAYOUT_PRESETS, INTERIOR_LAYOUT_PRESETS, TYPOGRAPHY_PRESETS
 from bookforge.pipeline import BookforgePipeline
-from bookforge.qc.image_qc import choose_best_variant, style_hist_similarity
+from bookforge.qc.image_qc import choose_best_variant
 from bookforge.story.story_spec import parse_story
 from bookforge.story.storyboard import generate_storyboard
+from bookforge.pipeline import _apply_checkpoint_overrides, _parse_spread_pairs
 
 
-def test_storyboard_schema(tmp_path: Path):
+def test_storyboard_schema_has_required_fields(tmp_path: Path):
     story = tmp_path / "story.md"
     story.write_text("## Page 1\nMira smiles in the forest.\n## Page 2\nMira explores town.", encoding="utf-8")
     parsed = parse_story(story, 2)
@@ -22,7 +24,7 @@ def test_storyboard_schema(tmp_path: Path):
     assert required.issubset(set(sb["pages"][0].keys()))
 
 
-def test_image_qc_prefers_sharp(tmp_path: Path):
+def test_image_qc_prefers_sharper_image(tmp_path: Path):
     blurry = tmp_path / "blurry.png"
     sharp = tmp_path / "sharp.png"
     Image.new("RGB", (120, 120), (120, 120, 120)).save(blurry)
@@ -43,14 +45,17 @@ def test_image_qc_prefers_sharp(tmp_path: Path):
     assert best == sharp
 
 
-def test_style_hist_similarity(tmp_path: Path):
-    a = tmp_path / "a.png"
-    b = tmp_path / "b.png"
-    c = tmp_path / "c.png"
-    Image.new("RGB", (80, 80), (200, 100, 50)).save(a)
-    Image.new("RGB", (80, 80), (200, 100, 50)).save(b)
-    Image.new("RGB", (80, 80), (20, 20, 200)).save(c)
-    assert style_hist_similarity(a, b) > style_hist_similarity(a, c)
+def test_composite_reference_outputs_png(tmp_path: Path):
+    char = tmp_path / "char.png"
+    style = tmp_path / "style.png"
+    out = tmp_path / "composite.png"
+    Image.new("RGB", (100, 120), (200, 100, 50)).save(char)
+    Image.new("RGB", (140, 120), (20, 20, 200)).save(style)
+
+    from bookforge.illustration.fal_flux import FalFluxIllustrator
+
+    FalFluxIllustrator().build_composite_reference(char, style, out)
+    assert out.exists() and out.suffix == ".png"
 
 
 def test_spread_split_dimensions(tmp_path: Path):
@@ -62,6 +67,13 @@ def test_spread_split_dimensions(tmp_path: Path):
     with Image.open(left) as l, Image.open(right) as r:
         assert l.size == (400, 400)
         assert r.size == (400, 400)
+
+
+def test_spread_validation_rejects_overlaps_and_nonconsecutive_pairs():
+    with pytest.raises(RuntimeError):
+        _parse_spread_pairs({"mode": "custom_pairs", "pairs": [[2, 4]]}, 10)
+    with pytest.raises(RuntimeError):
+        _parse_spread_pairs({"mode": "custom_pairs", "pairs": [[2, 3], [3, 4]]}, 10)
 
 
 def test_checkpoint_flow_template_written(tmp_path: Path):
@@ -97,6 +109,33 @@ def test_checkpoint_flow_template_written(tmp_path: Path):
     res = BookforgePipeline().studio(str(story), str(out), "8.5x8.5", 2, "fal", True)
     assert res["status"] == "STOPPED_CHECKPOINT"
     assert (out / "CHECKPOINT.json").exists()
+
+
+def test_checkpoint_overrides_apply_to_prompt_building():
+    prompts = [{"page_number": 3, "prompt": "base"}, {"page_number": 7, "prompt": "scene"}]
+    merged, summary = _apply_checkpoint_overrides(
+        prompts,
+        {
+            "approved": True,
+            "notes": "ok",
+            "overrides": {"page_prompt_addendum": {"3": "make it brighter"}, "force_regen": [7], "variant_preference": {"7": 2}},
+        },
+    )
+    assert merged[0]["prompt"].endswith("make it brighter")
+    assert summary["force_regen"] == [7]
+    assert summary["variant_preference"] == {"7": 2}
+
+
+def test_cover_title_color_choice(tmp_path: Path):
+    engine = PDFLayoutEngine.__new__(PDFLayoutEngine)
+    bright = tmp_path / "bright.png"
+    dark = tmp_path / "dark.png"
+    Image.new("RGB", (200, 120), (240, 240, 240)).save(bright)
+    Image.new("RGB", (200, 120), (20, 20, 20)).save(dark)
+    bright_main, _ = engine._choose_text_colors(bright, (0, 0, 200, 120))
+    dark_main, _ = engine._choose_text_colors(dark, (0, 0, 200, 120))
+    assert bright_main == black
+    assert dark_main == white
 
 
 def test_paragraph_layout_no_alpha():

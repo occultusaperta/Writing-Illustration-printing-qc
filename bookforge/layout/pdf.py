@@ -51,6 +51,27 @@ class PDFLayoutEngine:
                 out.append(word)
         return " ".join(out)
 
+    def _sample_region_luminance(self, image_path: Path, region: Tuple[int, int, int, int]) -> float:
+        with Image.open(image_path) as im:
+            rgb = im.convert("RGB")
+            x0, y0, x1, y1 = region
+            crop = rgb.crop((max(0, x0), max(0, y0), min(rgb.width, x1), min(rgb.height, y1)))
+            if crop.width == 0 or crop.height == 0:
+                return 255.0
+            px = list(crop.getdata())
+        return sum((0.299 * r + 0.587 * g + 0.114 * b) for r, g, b in px) / max(len(px), 1)
+
+    def _choose_text_colors(self, image_path: Path, region: Tuple[int, int, int, int], threshold: float = 140.0) -> Tuple[Any, Any]:
+        lum = self._sample_region_luminance(image_path, region)
+        return (black, white) if lum >= threshold else (white, black)
+
+    def _draw_stroked_centred_text(self, c: canvas.Canvas, x: float, y: float, text: str, main_color: Any, stroke_color: Any, stroke_offset: float = 1.0) -> None:
+        c.setFillColor(stroke_color)
+        for dx, dy in ((-stroke_offset, 0), (stroke_offset, 0), (0, -stroke_offset), (0, stroke_offset)):
+            c.drawCentredString(x + dx, y + dy, text)
+        c.setFillColor(main_color)
+        c.drawCentredString(x, y, text)
+
     def render_interior(self, pages: List[Dict[str, Any]], image_paths: List[str], output_interior: Path, size: str, bleed_in: float, safe_margin_in: float, layout_preset: Dict[str, Any], typography_preset: Dict[str, Any]) -> Dict[str, Any]:
         trim_w, trim_h = parse_trim_size(size)
         page_w = (trim_w + bleed_in * 2) * 72
@@ -62,7 +83,7 @@ class PDFLayoutEngine:
         safe_h = (trim_h - 2 * safe_margin_in) * 72
 
         for page, img_path in zip(pages, image_paths):
-            c.drawImage(ImageReader(img_path), 0, 0, page_w, page_h, preserveAspectRatio=True, anchor="c")
+            c.drawImage(ImageReader(img_path), 0, 0, page_w, page_h, preserveAspectRatio=False, anchor="c")
             panel_h = safe_h * layout_preset["panel_height_ratio"]
             panel_y = safe_y if layout_preset["panel_position"] == "bottom" else safe_y + safe_h - panel_h
             c.setFillColorRGB(1, 1, 1)
@@ -123,17 +144,21 @@ class PDFLayoutEngine:
             c.rect(0, 0, w_pt, h_pt, stroke=0, fill=1)
 
         c.drawImage(ImageReader(str(approved_cover)), front_x, 0, (trim_w + bleed_in) * 72, h_pt, preserveAspectRatio=True, anchor="c")
-        c.setFillColor(black)
         c.setFont(self.font_name, 30)
         title_y = panel_y + panel_h / 2
         if cover_preset["title_placement"] == "front_top":
             title_y = panel_y + panel_h - 50
         elif cover_preset["title_placement"] == "front_bottom":
             title_y = panel_y + 42
-        c.drawCentredString(front_x + trim_w * 36, title_y, title)
+        title_region = (int(front_x), int(max(0, title_y - 40)), int(front_x + trim_w * 72), int(min(h_pt, title_y + 40)))
+        title_color, title_outline = self._choose_text_colors(approved_cover, title_region)
+        self._draw_stroked_centred_text(c, front_x + trim_w * 36, title_y, title, title_color, title_outline, stroke_offset=1.2)
 
         c.setFont(self.font_name, 14)
-        c.drawCentredString(front_x + trim_w * 36, panel_y + 20 if cover_preset["author_placement"] == "front_bottom" else panel_y + panel_h - 78, author)
+        author_y = panel_y + 20 if cover_preset["author_placement"] == "front_bottom" else panel_y + panel_h - 78
+        author_region = (int(front_x), int(max(0, author_y - 24)), int(front_x + trim_w * 72), int(min(h_pt, author_y + 24)))
+        author_color, author_outline = self._choose_text_colors(approved_cover, author_region)
+        self._draw_stroked_centred_text(c, front_x + trim_w * 36, author_y, author, author_color, author_outline, stroke_offset=1.0)
         if spine_w >= cover_config["spine_text_min_in"]:
             c.saveState()
             c.translate(spine_x + (spine_w * 72) / 2, panel_y + panel_h / 2)
