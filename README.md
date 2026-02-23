@@ -20,6 +20,14 @@ pip install -e ".[ui]"
 bookforge ui
 ```
 
+UI highlights:
+- Black “Liquid Glass” local control plane.
+- Full gate flow: doctor → preprod → approval gate → lock → studio → checkpoint gate → verify.
+- Mandatory human gate editing via `APPROVAL.json` and `CHECKPOINT.json`.
+- Max Quality toggle with MAX profile auto-select or fallback approval prefill.
+- Built-in estimator for expected Fal calls.
+- Run History, Publisher Checklist, Worst Pages overrides (`OVERRIDES.json`), and artifact open/download controls.
+
 ## Preprod outputs
 - Story parse + bible variants (`preprod/bible_variants/v1..vN`)
 - Fal/Flux option images: character, style, cover concept
