@@ -27,30 +27,33 @@ def main() -> int:
         shutil.rmtree(OUT_DIR)
 
     run(["bookforge", "doctor", "--strict"])
-    run([
-        "bookforge", "preprod", "--story", "examples/sample_story.md", "--out", str(OUT_DIR),
-        "--size", "8.5x8.5", "--pages", "8", "--variants", "2",
-    ])
+    run(["bookforge", "preprod", "--story", "examples/sample_story.md", "--out", str(OUT_DIR), "--size", "8.5x8.5", "--pages", "8", "--variants", "2"])
 
     approval = json.loads(PREPROD_APPROVAL.read_text(encoding="utf-8"))
     variant = 1
     approval["approved"] = True
     approval["approved_variant"] = variant
-    approval["approved_character"] = f"char_v{variant}.png"
-    approval["approved_style"] = f"style_v{variant}.png"
-    approval["approved_cover"] = f"cover_v{variant}.png"
+    approval["approved_character"] = f"character_turnaround_v{variant}.png"
+    approval["approved_style"] = f"style_frame_v{variant}.png"
+    approval["approved_cover"] = f"cover_concept_v{variant}.png"
+    approval["checkpoint_pages"] = 0
+    approval["qa_profile"] = "platinum"
     approval["fal_endpoint"] = approval.get("fal_endpoint", "https://fal.run/fal-ai/flux/schnell")
     PREPROD_APPROVAL.write_text(json.dumps(approval, indent=2), encoding="utf-8")
 
     run(["bookforge", "lock", "--out", str(OUT_DIR), "--size", "8.5x8.5", "--pages", "8"])
-    run([
-        "bookforge", "studio", "--story", "examples/sample_story.md", "--out", str(OUT_DIR),
-        "--size", "8.5x8.5", "--pages", "8", "--illustrator", "fal", "--require-lock",
-    ])
+    run(["bookforge", "studio", "--story", "examples/sample_story.md", "--out", str(OUT_DIR), "--size", "8.5x8.5", "--pages", "8", "--illustrator", "fal", "--require-lock"])
 
     expected = [
-        OUT_DIR / "interior.pdf", OUT_DIR / "cover_wrap.pdf", OUT_DIR / "cover_guides.pdf",
-        OUT_DIR / "preflight_report.json", OUT_DIR / "LOCK.json", OUT_DIR / "prompts.json", OUT_DIR / "bookforge_package.zip",
+        OUT_DIR / "interior.pdf",
+        OUT_DIR / "cover_wrap.pdf",
+        OUT_DIR / "cover_guides.pdf",
+        OUT_DIR / "preflight_report.json",
+        OUT_DIR / "LOCK.json",
+        OUT_DIR / "prompts.json",
+        OUT_DIR / "bookforge_package.zip",
+        OUT_DIR / "review" / "contact_sheet.pdf",
+        OUT_DIR / "review" / "qa_report.json",
     ]
     missing = [str(p) for p in expected if not p.exists()]
     if missing:

@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from PIL import Image, ImageFilter
 from reportlab.lib.colors import black, white
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph
+
+try:
+    import pyphen
+except Exception:  # optional runtime dependency in some environments
+    pyphen = None
 
 
 def parse_trim_size(size: str) -> Tuple[float, float]:
@@ -25,6 +31,25 @@ class PDFLayoutEngine:
             pdfmetrics.registerFont(TTFont(self.font_name, str(self.font_path)))
         except Exception as exc:
             raise RuntimeError("Font embed failed. Ensure assets/fonts/NotoSans-Regular.ttf exists and is a valid TTF.") from exc
+
+    def _soften_widow(self, text: str) -> str:
+        parts = text.split()
+        if len(parts) > 3:
+            parts[-2] = parts[-2] + "&nbsp;" + parts[-1]
+            parts.pop()
+        return " ".join(parts)
+
+    def _hyphenate_text(self, text: str) -> str:
+        if pyphen is None:
+            return text
+        dic = pyphen.Pyphen(lang="en_US")
+        out = []
+        for word in text.split():
+            if len(word) > 10:
+                out.append(dic.inserted(word, hyphen="&#8209;"))
+            else:
+                out.append(word)
+        return " ".join(out)
 
     def render_interior(self, pages: List[Dict[str, Any]], image_paths: List[str], output_interior: Path, size: str, bleed_in: float, safe_margin_in: float, layout_preset: Dict[str, Any], typography_preset: Dict[str, Any]) -> Dict[str, Any]:
         trim_w, trim_h = parse_trim_size(size)
@@ -42,30 +67,32 @@ class PDFLayoutEngine:
             panel_y = safe_y if layout_preset["panel_position"] == "bottom" else safe_y + safe_h - panel_h
             c.setFillColorRGB(1, 1, 1)
             c.roundRect(safe_x, panel_y, safe_w, panel_h, 8, stroke=0, fill=1)
-            c.setFillColor(black)
 
-            raw_text = page["text"].strip()
+            raw_text = self._soften_widow(self._hyphenate_text(page["text"].strip()))
             font_size = typography_preset["base_font_size"]
-            wrapped: List[str] = []
+            para_h = panel_h - 2 * layout_preset["panel_padding_pt"]
+            para_w = safe_w - 2 * layout_preset["panel_padding_pt"]
+            para = None
             while font_size >= typography_preset["min_font_size"]:
-                max_chars = max(14, int((safe_w - 2 * layout_preset["panel_padding_pt"]) / (font_size * 0.50)))
-                wrapped = textwrap.wrap(raw_text, width=max_chars)
-                line_h = font_size * typography_preset["leading"]
-                if len(wrapped) <= typography_preset["max_lines"] and len(wrapped) * line_h <= panel_h - 2 * layout_preset["panel_padding_pt"]:
+                style = ParagraphStyle(
+                    name="body",
+                    fontName=self.font_name,
+                    fontSize=font_size,
+                    leading=font_size * typography_preset["leading"],
+                    alignment=1 if layout_preset["text_align"] == "center" else 0,
+                    textColor=black,
+                )
+                para = Paragraph(raw_text, style)
+                _, needed_h = para.wrap(para_w, para_h)
+                if needed_h <= para_h:
                     break
                 font_size -= 1
-            if font_size < typography_preset["min_font_size"]:
+            if para is None or font_size < typography_preset["min_font_size"]:
                 raise RuntimeError(f"Text overflow could not be resolved on page {page['page_number']}. Reduce text or choose a larger panel preset.")
 
-            c.setFont(self.font_name, font_size)
-            y = panel_y + panel_h - layout_preset["panel_padding_pt"] - font_size
-            for line in wrapped:
-                if layout_preset["text_align"] == "center":
-                    c.drawCentredString(safe_x + safe_w / 2, y, line)
-                else:
-                    c.drawString(safe_x + layout_preset["panel_padding_pt"], y, line)
-                y -= font_size * typography_preset["leading"]
+            para.drawOn(c, safe_x + layout_preset["panel_padding_pt"], panel_y + panel_h - layout_preset["panel_padding_pt"] - needed_h)
             if layout_preset["show_page_numbers"]:
+                c.setFillColor(black)
                 c.setFont(self.font_name, 9)
                 c.drawRightString(page_w - safe_x, safe_y - 14, str(page["page_number"]))
             c.showPage()
@@ -97,15 +124,13 @@ class PDFLayoutEngine:
 
         c.drawImage(ImageReader(str(approved_cover)), front_x, 0, (trim_w + bleed_in) * 72, h_pt, preserveAspectRatio=True, anchor="c")
         c.setFillColor(black)
+        c.setFont(self.font_name, 30)
+        title_y = panel_y + panel_h / 2
         if cover_preset["title_placement"] == "front_top":
-            c.setFont(self.font_name, 30)
-            c.drawCentredString(front_x + trim_w * 36, panel_y + panel_h - 50, title)
+            title_y = panel_y + panel_h - 50
         elif cover_preset["title_placement"] == "front_bottom":
-            c.setFont(self.font_name, 30)
-            c.drawCentredString(front_x + trim_w * 36, panel_y + 42, title)
-        else:
-            c.setFont(self.font_name, 30)
-            c.drawCentredString(front_x + trim_w * 36, panel_y + panel_h / 2, title)
+            title_y = panel_y + 42
+        c.drawCentredString(front_x + trim_w * 36, title_y, title)
 
         c.setFont(self.font_name, 14)
         c.drawCentredString(front_x + trim_w * 36, panel_y + 20 if cover_preset["author_placement"] == "front_bottom" else panel_y + panel_h - 78, author)
@@ -128,13 +153,7 @@ class PDFLayoutEngine:
         g.line(spine_x, panel_y, spine_x, panel_y + panel_h)
         g.line(front_x, panel_y, front_x, panel_y + panel_h)
         g.save()
-        return {
-            "cover_w_in": cover_w,
-            "cover_h_in": cover_h,
-            "back_background_rect_pt": [0, 0, w_pt, h_pt],
-            "front_art_rect_pt": [front_x, 0, (trim_w + bleed_in) * 72, h_pt],
-            "spine_rect_pt": [spine_x, panel_y, spine_w * 72, panel_h],
-        }
+        return {"cover_w_in": cover_w, "cover_h_in": cover_h, "back_background_rect_pt": [0, 0, w_pt, h_pt], "front_art_rect_pt": [front_x, 0, (trim_w + bleed_in) * 72, h_pt], "spine_rect_pt": [spine_x, panel_y, spine_w * 72, panel_h]}
 
     def render_interior_preview(self, out_pdf: Path, size: str, bleed_in: float, safe_margin_in: float, preset: Any) -> None:
         out_pdf.parent.mkdir(parents=True, exist_ok=True)
