@@ -167,6 +167,32 @@ class PDFLayoutEngine:
             c.drawCentredString(0, 0, title)
             c.restoreState()
 
+        subtitle = str(cover_config.get("subtitle", "")).strip()
+        if subtitle:
+            c.setFont(self.font_name, 12)
+            subtitle_y = author_y - 22
+            self._draw_stroked_centred_text(c, front_x + trim_w * 36, subtitle_y, subtitle, author_color, author_outline, stroke_offset=0.8)
+
+        blurb = str(cover_config.get("back_blurb", "")).strip()
+        if blurb:
+            bbx, bby, bbw, bbh = cover_preset.get("blurb_box_in", [0.6, 2.0, max(1.0, trim_w - 1.2), max(1.0, trim_h - 3.0)])
+            x = back_x + bbx * 72
+            y = panel_y + bby * 72
+            w = bbw * 72
+            h = bbh * 72
+            bx, by, bw, bh = cover_preset["barcode_box_in"]
+            bb = (x, y, x + w, y + h)
+            barcode = (back_x + bx * 72, panel_y + by * 72, back_x + (bx + bw) * 72, panel_y + (by + bh) * 72)
+            overlap = not (bb[2] <= barcode[0] or bb[0] >= barcode[2] or bb[3] <= barcode[1] or bb[1] >= barcode[3])
+            if overlap:
+                raise RuntimeError("Blurb box overlaps barcode box. Update cover preset geometry.")
+            style = ParagraphStyle(name="blurb", fontName=self.font_name, fontSize=10, leading=12, textColor=black, alignment=0)
+            para = Paragraph(blurb, style)
+            _, needed_h = para.wrap(w, h)
+            if needed_h > h:
+                raise RuntimeError("Back-cover blurb overflowed blurb box. Choose a shorter blurb or larger blurb box preset.")
+            para.drawOn(c, x, y + h - needed_h)
+
         bx, by, bw, bh = cover_preset["barcode_box_in"]
         c.setFillColor(white)
         c.rect(back_x + bx * 72, panel_y + by * 72, bw * 72, bh * 72, stroke=0, fill=1)

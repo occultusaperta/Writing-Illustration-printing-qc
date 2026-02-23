@@ -36,6 +36,7 @@ class CoverLayoutPreset:
     author_placement: str
     spine_text_rule: str
     back_blurb_box: str
+    blurb_box_in: list[float]
     barcode_box_in: list[float]
     back_background_mode: str
 
@@ -54,10 +55,10 @@ TYPOGRAPHY_PRESETS: List[TypographyPreset] = [
 ]
 
 COVER_LAYOUT_PRESETS: List[CoverLayoutPreset] = [
-    CoverLayoutPreset("front_title_top_back_blurb", "Title Top / Back Blurb", "Classic premium layout with title on top and back blurb block.", "front_top", "front_bottom", "if_spine_wide", "upper_middle", [0.6, 0.6, 2.0, 1.2], "solid"),
-    CoverLayoutPreset("center_title_spine_if_room", "Centered Title", "Centered title with optional spine text when wide enough.", "front_center", "front_bottom", "if_spine_wide", "lower_middle", [0.6, 0.6, 2.0, 1.2], "style_blur"),
-    CoverLayoutPreset("lower_title_author_top", "Lower Title", "Title near bottom and author near top for dramatic art focus.", "front_bottom", "front_top", "if_spine_wide", "upper_middle", [0.6, 0.7, 2.0, 1.2], "style_blur"),
-    CoverLayoutPreset("minimal_top_author_bottom", "Minimal Top", "Minimal typographic treatment with clean back panel.", "front_top", "front_bottom", "if_spine_wide", "center", [0.7, 0.6, 2.0, 1.2], "solid"),
+    CoverLayoutPreset("front_title_top_back_blurb", "Title Top / Back Blurb", "Classic premium layout with title on top and back blurb block.", "front_top", "front_bottom", "if_spine_wide", "upper_middle", [0.55, 1.95, 7.1, 4.7], [0.6, 0.6, 2.0, 1.2], "solid"),
+    CoverLayoutPreset("center_title_spine_if_room", "Centered Title", "Centered title with optional spine text when wide enough.", "front_center", "front_bottom", "if_spine_wide", "lower_middle", [0.6, 2.1, 7.0, 4.5], [0.6, 0.6, 2.0, 1.2], "style_blur"),
+    CoverLayoutPreset("lower_title_author_top", "Lower Title", "Title near bottom and author near top for dramatic art focus.", "front_bottom", "front_top", "if_spine_wide", "upper_middle", [0.55, 1.9, 7.1, 4.7], [0.6, 0.7, 2.0, 1.2], "style_blur"),
+    CoverLayoutPreset("minimal_top_author_bottom", "Minimal Top", "Minimal typographic treatment with clean back panel.", "front_top", "front_bottom", "if_spine_wide", "center", [0.7, 2.0, 6.8, 4.5], [0.7, 0.6, 2.0, 1.2], "solid"),
 ]
 
 

@@ -7,6 +7,14 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 from PIL import Image
 
+from bookforge.qc.visual_integrity import (
+    border_artifact_score,
+    face_like_regions,
+    logo_likelihood,
+    text_likelihood,
+    watermark_likelihood,
+)
+
 
 def _gray(arr: np.ndarray) -> np.ndarray:
     return 0.299 * arr[:, :, 0] + 0.587 * arr[:, :, 1] + 0.114 * arr[:, :, 2]
@@ -68,20 +76,36 @@ def page_to_page_hist_drift(image: Path, prev_image: Path) -> float:
 
 
 def _variant_report(path: Path, qa_config: Dict[str, Any], style_ref: Path | None, prev_ref: Path | None) -> Dict[str, Any]:
+    faces = face_like_regions(path)
     report = {
         "path": str(path),
         "sharpness": sharpness(path),
         "entropy": entropy(path),
         "contrast": contrast(path),
         "border_bar_score": border_bar_score(path),
+        "text_likelihood": text_likelihood(path),
+        "watermark_likelihood": watermark_likelihood(path),
+        "logo_likelihood": logo_likelihood(path),
+        "border_artifact_score": border_artifact_score(path),
+        "face_like_regions": faces,
         "style_hist_similarity": style_hist_similarity(path, style_ref) if style_ref else 1.0,
         "page_to_page_hist_drift": page_to_page_hist_drift(path, prev_ref) if prev_ref else 0.0,
     }
+    face_limit = int(qa_config.get("max_face_like_regions", 3))
+    face_fail = faces > face_limit
+    report["warnings"] = []
+    if face_fail:
+        report["warnings"].append(f"face_like_regions>{face_limit}")
     report["passes"] = (
         report["sharpness"] >= qa_config["min_sharpness"]
         and report["entropy"] >= qa_config["min_entropy"]
         and report["contrast"] >= qa_config["min_contrast"]
         and report["border_bar_score"] <= qa_config["max_border_bar_score"]
+        and report["text_likelihood"] <= qa_config["max_text_likelihood"]
+        and report["watermark_likelihood"] <= qa_config["max_watermark_likelihood"]
+        and report["logo_likelihood"] <= qa_config["max_logo_likelihood"]
+        and report["border_artifact_score"] <= qa_config["max_border_artifact_score"]
+        and not face_fail
         and report["style_hist_similarity"] >= qa_config["min_style_hist_similarity"]
         and report["page_to_page_hist_drift"] <= qa_config["max_page_to_page_hist_drift"]
     )
@@ -94,6 +118,7 @@ def choose_best_variant(paths: List[Path], qa_config: Dict[str, Any], style_ref:
         reports,
         key=lambda r: (
             r["passes"],
+            -4.0 * r["text_likelihood"] - 4.0 * r["watermark_likelihood"] - 3.0 * r["logo_likelihood"] - 3.0 * r["border_artifact_score"],
             r["style_hist_similarity"] - r["page_to_page_hist_drift"],
             r["sharpness"] + r["contrast"] + r["entropy"],
         ),

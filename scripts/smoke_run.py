@@ -71,6 +71,8 @@ def main() -> int:
         OUT_DIR / "bookforge_package.zip",
         OUT_DIR / "review" / "contact_sheet.pdf",
         OUT_DIR / "review" / "qa_report.json",
+        OUT_DIR / "review" / "proof_pack.pdf",
+        OUT_DIR / "review" / "production_report.json",
     ]
     missing = [str(p) for p in expected if not p.exists()]
     if missing:
@@ -82,6 +84,16 @@ def main() -> int:
     preflight = json.loads((OUT_DIR / "preflight_report.json").read_text(encoding="utf-8"))
     if preflight.get("status") == "FAIL":
         print("Smoke run failed: preflight status is FAIL")
+        return 1
+
+    qa_report = json.loads((OUT_DIR / "review" / "qa_report.json").read_text(encoding="utf-8"))
+    if "cache_hits" not in qa_report:
+        print("Smoke run failed; qa_report missing cache_hits")
+        return 1
+    first_attempt = qa_report.get("attempts", [{}])[0].get("best", {}) if qa_report.get("attempts") else {}
+    required_integrity = {"text_likelihood", "watermark_likelihood", "logo_likelihood", "border_artifact_score"}
+    if first_attempt and not required_integrity.issubset(set(first_attempt.keys())):
+        print("Smoke run failed; integrity metrics missing from qa_report")
         return 1
 
     if approval.get("spread_mode", "none") != "none":
