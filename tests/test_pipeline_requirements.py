@@ -136,3 +136,55 @@ def test_paragraph_layout_no_alpha():
     src = Path("bookforge/layout/pdf.py").read_text(encoding="utf-8")
     assert "Paragraph(" in src
     assert "alpha=" not in src
+
+
+def test_package_includes_ultimate_imprint_artifacts(tmp_path: Path):
+    out = tmp_path / "out"
+    (out / "review" / "thumbs").mkdir(parents=True, exist_ok=True)
+
+    required_files = [
+        "interior.pdf",
+        "cover_wrap.pdf",
+        "cover_guides.pdf",
+        "preflight_report.json",
+        "LOCK.json",
+        "prompts.json",
+        "review/contact_sheet.pdf",
+        "review/qa_report.json",
+        "review/proof_pack.pdf",
+        "review/production_report.json",
+        "review/quality_summary.md",
+        "review/report.html",
+        "review/thumbs/cover.jpg",
+        "review/thumbs/page_001.jpg",
+    ]
+    for rel in required_files:
+        target = out / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+
+    zip_path = out / "bookforge_package.zip"
+    BookforgePipeline()._create_package(zip_path, out)
+
+    import zipfile
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        names = set(zf.namelist())
+
+    expected = {
+        "interior.pdf",
+        "cover_wrap.pdf",
+        "cover_guides.pdf",
+        "preflight_report.json",
+        "LOCK.json",
+        "prompts.json",
+        "review/contact_sheet.pdf",
+        "review/qa_report.json",
+        "review/proof_pack.pdf",
+        "review/production_report.json",
+        "review/quality_summary.md",
+        "review/report.html",
+        "review/thumbs/cover.jpg",
+        "review/thumbs/page_001.jpg",
+    }
+    assert expected.issubset(names)

@@ -585,7 +585,20 @@ class BookforgePipeline:
         return {"status": preflight["status"], "out_dir": str(out), "zip": str(zip_path)}
 
     def _create_package(self, zip_path: Path, out: Path) -> None:
-        include = ["interior.pdf", "cover_wrap.pdf", "cover_guides.pdf", "preflight_report.json", "LOCK.json", "prompts.json", "review/quality_summary.md", "review/proof_pack.pdf", "review/production_report.json", "review/qa_report.json", "review/report.html"]
+        include = [
+            "interior.pdf",
+            "cover_wrap.pdf",
+            "cover_guides.pdf",
+            "preflight_report.json",
+            "LOCK.json",
+            "prompts.json",
+            "review/contact_sheet.pdf",
+            "review/quality_summary.md",
+            "review/proof_pack.pdf",
+            "review/production_report.json",
+            "review/qa_report.json",
+            "review/report.html",
+        ]
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for rel in include:
                 path = out / rel
