@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
 from typing import Any, Dict, List, Tuple
 
 from PIL import Image, ImageFilter
@@ -21,6 +22,27 @@ except Exception:  # optional runtime dependency in some environments
 def parse_trim_size(size: str) -> Tuple[float, float]:
     w, h = size.lower().split("x")
     return float(w), float(h)
+
+
+def fit_cover_image_to_rect(approved_cover: Path, target_w_px: int, target_h_px: int) -> Path:
+    with Image.open(approved_cover) as im:
+        rgb = im.convert("RGB")
+        src_ratio = rgb.width / max(1, rgb.height)
+        target_ratio = target_w_px / max(1, target_h_px)
+        if src_ratio > target_ratio:
+            new_w = int(rgb.height * target_ratio)
+            left = max(0, (rgb.width - new_w) // 2)
+            crop = rgb.crop((left, 0, left + new_w, rgb.height))
+        else:
+            new_h = int(rgb.width / max(target_ratio, 1e-6))
+            top = max(0, (rgb.height - new_h) // 2)
+            crop = rgb.crop((0, top, rgb.width, top + new_h))
+        fitted = crop.resize((target_w_px, target_h_px), Image.Resampling.LANCZOS)
+    fd, name = tempfile.mkstemp(prefix="bookforge_fit_", suffix=".jpg")
+    Path(name).unlink(missing_ok=True)
+    out = Path(name)
+    fitted.save(out, format="JPEG", quality=95)
+    return out
 
 
 class PDFLayoutEngine:
@@ -72,18 +94,31 @@ class PDFLayoutEngine:
         c.setFillColor(main_color)
         c.drawCentredString(x, y, text)
 
-    def render_interior(self, pages: List[Dict[str, Any]], image_paths: List[str], output_interior: Path, size: str, bleed_in: float, safe_margin_in: float, layout_preset: Dict[str, Any], typography_preset: Dict[str, Any]) -> Dict[str, Any]:
+    def render_interior(self, pages: List[Dict[str, Any]], image_paths: List[str], output_interior: Path, size: str, bleed_in: float, safe_margin_in: float, layout_preset: Dict[str, Any], typography_preset: Dict[str, Any], pdf_options: Dict[str, Any] | None = None) -> Dict[str, Any]:
         trim_w, trim_h = parse_trim_size(size)
         page_w = (trim_w + bleed_in * 2) * 72
         page_h = (trim_h + bleed_in * 2) * 72
-        c = canvas.Canvas(str(output_interior), pagesize=(page_w, page_h), pageCompression=0)
+        c = canvas.Canvas(str(output_interior), pagesize=(page_w, page_h), pageCompression=1)
         safe_x = (bleed_in + safe_margin_in) * 72
         safe_y = (bleed_in + safe_margin_in) * 72
         safe_w = (trim_w - 2 * safe_margin_in) * 72
         safe_h = (trim_h - 2 * safe_margin_in) * 72
 
+        options = pdf_options or {}
+        embed_mode = str(options.get("image_embed", "jpeg")).lower()
+        jpeg_quality = int(options.get("jpeg_quality", 92))
         for page, img_path in zip(pages, image_paths):
-            c.drawImage(ImageReader(img_path), 0, 0, page_w, page_h, preserveAspectRatio=False, anchor="c")
+            embed_path = Path(img_path)
+            temp_path: Path | None = None
+            if embed_mode == "jpeg":
+                with Image.open(embed_path) as im:
+                    rgb = im.convert("RGB")
+                    temp_path = output_interior.parent / f".tmp_embed_{page['page_number']:03d}.jpg"
+                    rgb.save(temp_path, format="JPEG", quality=jpeg_quality, subsampling=0)
+                embed_path = temp_path
+            c.drawImage(ImageReader(str(embed_path)), 0, 0, page_w, page_h, preserveAspectRatio=False, anchor="c")
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
             panel_h = safe_h * layout_preset["panel_height_ratio"]
             panel_y = safe_y if layout_preset["panel_position"] == "bottom" else safe_y + safe_h - panel_h
             c.setFillColorRGB(1, 1, 1)
@@ -124,7 +159,7 @@ class PDFLayoutEngine:
         cover_w = 2 * trim_w + spine_w + 2 * bleed_in
         cover_h = trim_h + 2 * bleed_in
         w_pt, h_pt = cover_w * 72, cover_h * 72
-        c = canvas.Canvas(str(output_cover), pagesize=(w_pt, h_pt), pageCompression=0)
+        c = canvas.Canvas(str(output_cover), pagesize=(w_pt, h_pt), pageCompression=1)
 
         back_x = bleed_in * 72
         spine_x = (bleed_in + trim_w) * 72
@@ -135,15 +170,21 @@ class PDFLayoutEngine:
         if cover_preset["back_background_mode"] == "style_blur" and approved_style.exists():
             with Image.open(approved_style) as im:
                 blur = im.convert("RGB").filter(ImageFilter.GaussianBlur(radius=6))
-                tmp = output_cover.parent / ".tmp_style_blur.jpg"
-                blur.save(tmp)
-                c.drawImage(ImageReader(str(tmp)), 0, 0, w_pt, h_pt, preserveAspectRatio=True, anchor="c")
-                tmp.unlink(missing_ok=True)
+                tmp_blur = output_cover.parent / ".tmp_style_blur.jpg"
+                blur.save(tmp_blur, format="JPEG", quality=90)
+            fitted_blur = fit_cover_image_to_rect(tmp_blur, int(round(w_pt)), int(round(h_pt)))
+            c.drawImage(ImageReader(str(fitted_blur)), 0, 0, w_pt, h_pt, preserveAspectRatio=False, anchor="c")
+            fitted_blur.unlink(missing_ok=True)
+            tmp_blur.unlink(missing_ok=True)
         else:
             c.setFillColorRGB(0.94, 0.93, 0.9)
             c.rect(0, 0, w_pt, h_pt, stroke=0, fill=1)
 
-        c.drawImage(ImageReader(str(approved_cover)), front_x, 0, (trim_w + bleed_in) * 72, h_pt, preserveAspectRatio=True, anchor="c")
+        front_w = (trim_w + bleed_in) * 72
+        front_h = h_pt
+        fitted_cover = fit_cover_image_to_rect(approved_cover, int(round(front_w)), int(round(front_h)))
+        c.drawImage(ImageReader(str(fitted_cover)), front_x, 0, front_w, front_h, preserveAspectRatio=False, anchor="c")
+        fitted_cover.unlink(missing_ok=True)
         c.setFont(self.font_name, 30)
         title_y = panel_y + panel_h / 2
         if cover_preset["title_placement"] == "front_top":
@@ -198,7 +239,7 @@ class PDFLayoutEngine:
         c.rect(back_x + bx * 72, panel_y + by * 72, bw * 72, bh * 72, stroke=0, fill=1)
         c.save()
 
-        g = canvas.Canvas(str(output_guides), pagesize=(w_pt, h_pt), pageCompression=0)
+        g = canvas.Canvas(str(output_guides), pagesize=(w_pt, h_pt), pageCompression=1)
         g.rect(back_x, panel_y, (2 * trim_w + spine_w) * 72, panel_h)
         g.rect((bleed_in + safe_margin_in) * 72, (bleed_in + safe_margin_in) * 72, (2 * trim_w + spine_w - 2 * safe_margin_in) * 72, (trim_h - 2 * safe_margin_in) * 72)
         g.line(spine_x, panel_y, spine_x, panel_y + panel_h)

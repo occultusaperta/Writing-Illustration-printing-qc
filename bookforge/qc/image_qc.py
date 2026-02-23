@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 from PIL import Image
 
+from bookforge.qc.composition_qc import focus_bleed_overlap
 from bookforge.qc.visual_integrity import (
     border_artifact_score,
     face_like_regions,
@@ -77,6 +78,7 @@ def page_to_page_hist_drift(image: Path, prev_image: Path) -> float:
 
 def _variant_report(path: Path, qa_config: Dict[str, Any], style_ref: Path | None, prev_ref: Path | None) -> Dict[str, Any]:
     faces = face_like_regions(path)
+    focus = focus_bleed_overlap(path)
     report = {
         "path": str(path),
         "sharpness": sharpness(path),
@@ -90,12 +92,18 @@ def _variant_report(path: Path, qa_config: Dict[str, Any], style_ref: Path | Non
         "face_like_regions": faces,
         "style_hist_similarity": style_hist_similarity(path, style_ref) if style_ref else 1.0,
         "page_to_page_hist_drift": page_to_page_hist_drift(path, prev_ref) if prev_ref else 0.0,
+        "focus_bleed_overlap": focus["overlap"],
+        "focus_box": focus["focus_box"],
     }
     face_limit = int(qa_config.get("max_face_like_regions", 3))
     face_fail = faces > face_limit
     report["warnings"] = []
     if face_fail:
         report["warnings"].append(f"face_like_regions>{face_limit}")
+    max_focus_overlap = float(qa_config.get("max_focus_bleed_overlap", 0.15))
+    focus_fail = report["focus_bleed_overlap"] > max_focus_overlap
+    if focus_fail:
+        report["warnings"].append(f"focus_bleed_overlap>{max_focus_overlap}")
     report["passes"] = (
         report["sharpness"] >= qa_config["min_sharpness"]
         and report["entropy"] >= qa_config["min_entropy"]
@@ -108,6 +116,7 @@ def _variant_report(path: Path, qa_config: Dict[str, Any], style_ref: Path | Non
         and not face_fail
         and report["style_hist_similarity"] >= qa_config["min_style_hist_similarity"]
         and report["page_to_page_hist_drift"] <= qa_config["max_page_to_page_hist_drift"]
+        and not focus_fail
     )
     return report
 

@@ -8,7 +8,7 @@ from pypdf import PdfReader
 
 
 class KDPPreflight:
-    def run(self, interior_pdf: Path, cover_pdf: Path, image_paths: List[str], trim_w: float, trim_h: float, bleed_in: float, page_count: int, spine_w: float, upscaled_pages: List[int], cover_config: Dict[str, Any], safe_in: float) -> Dict[str, Any]:
+    def run(self, interior_pdf: Path, cover_pdf: Path, image_paths: List[str], trim_w: float, trim_h: float, bleed_in: float, page_count: int, spine_w: float, upscaled_pages: List[int], cover_config: Dict[str, Any], safe_in: float, max_interior_mb: float = 300.0) -> Dict[str, Any]:
         checks: List[Dict[str, Any]] = []
         errors: List[str] = []
         warnings: List[str] = []
@@ -64,6 +64,9 @@ class KDPPreflight:
 
         if page_count % 2 != 0:
             warnings.append("Odd page count. KDP may insert blanks; prefer even page counts.")
+        interior_mb = interior_pdf.stat().st_size / (1024 * 1024)
+        if interior_mb > max_interior_mb:
+            warnings.append(f"Interior PDF size {interior_mb:.1f}MB exceeds configured threshold {max_interior_mb:.1f}MB.")
         if upscaled_pages:
             warnings.append(f"Heavy upscaling occurred on pages {upscaled_pages}. Consider increasing Fal output fidelity.")
 
