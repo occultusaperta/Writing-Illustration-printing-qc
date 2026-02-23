@@ -172,6 +172,63 @@ def estimate_fal_calls(
     return {"low": _calc(low_rate), "likely": likely, "high": _calc(high_rate)}
 
 
+def resolve_variant_assets(out_dir: Path, variant_index: int) -> Dict[str, Any]:
+    preprod = Path(out_dir) / "preprod"
+    variant_token = f"v{int(variant_index)}"
+    selection: Dict[str, Any] = {"approved_variant": int(variant_index)}
+
+    variant_patterns = {
+        "approved_character": (preprod / "character_options", [f"*_{variant_token}.png", f"*{variant_token}.png"]),
+        "approved_style": (preprod / "style_options", [f"*_{variant_token}.png", f"*{variant_token}.png"]),
+        "approved_cover": (preprod / "cover_options", [f"*_{variant_token}.png", f"*{variant_token}.png"]),
+    }
+
+    for key, (folder, patterns) in variant_patterns.items():
+        if not folder.exists():
+            continue
+        match: Path | None = None
+        for pattern in patterns:
+            candidates = sorted(folder.glob(pattern))
+            if candidates:
+                match = candidates[0]
+                break
+        if match is not None:
+            selection[key] = match.name
+
+    anchor_keys = [
+        "character_turnaround",
+        "expression_grid",
+        "hands_pose",
+        "palette_tile",
+        "style_frame",
+        "cover_concept",
+    ]
+    anchor_dir = preprod / "anchor_pack"
+    anchors: Dict[str, str] = {}
+    if anchor_dir.exists():
+        for key in anchor_keys:
+            path = anchor_dir / f"{key}_{variant_token}.png"
+            if path.exists():
+                anchors[key] = path.name
+    if anchors:
+        selection["anchors"] = anchors
+
+    return selection
+
+
+def apply_variant_selection_to_approval(approval: Dict[str, Any], selection: Dict[str, Any]) -> Dict[str, Any]:
+    updated = dict(approval)
+    for key in ["approved_variant", "approved_character", "approved_style", "approved_cover"]:
+        if key in selection:
+            updated[key] = selection[key]
+
+    anchors = selection.get("anchors")
+    if isinstance(anchors, dict):
+        for key, value in anchors.items():
+            updated[key] = value
+    return updated
+
+
 def scan_run_history(dist_dir: str | Path = "dist") -> List[Dict[str, Any]]:
     root = Path(dist_dir)
     if not root.exists():

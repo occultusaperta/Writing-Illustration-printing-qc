@@ -7,12 +7,14 @@ from typing import Any, Dict, List
 import streamlit as st
 
 from bookforge.ui.utils import (
+    apply_variant_selection_to_approval,
     discover_profiles,
     estimate_fal_calls,
     list_files,
     open_in_system_viewer,
     read_certification_markdown,
     read_json,
+    resolve_variant_assets,
     run_bookforge_command,
     save_story_text,
     scan_run_history,
@@ -268,6 +270,108 @@ def _render_preprod() -> None:
         _render_checklist("post-preprod")
 
 
+
+
+def _snippet(path: Path, max_chars: int) -> str:
+    if not path.exists():
+        return ""
+    content = path.read_text(encoding="utf-8").strip().replace("\n", " ")
+    if len(content) <= max_chars:
+        return content
+    return content[:max_chars].rstrip() + "…"
+
+
+def _detect_variant_indices(paths: Dict[str, Path], approval: Dict[str, Any], char_files: List[str]) -> List[int]:
+    variants: set[int] = set()
+
+    for name in char_files:
+        if "_v" in name and name.lower().endswith(".png"):
+            suffix = name.rsplit("_v", 1)[-1].removesuffix(".png")
+            if suffix.isdigit():
+                variants.add(int(suffix))
+
+    raw_variants = approval.get("variants")
+    if isinstance(raw_variants, list):
+        for item in raw_variants:
+            if isinstance(item, int):
+                variants.add(item)
+            elif isinstance(item, str) and item.isdigit():
+                variants.add(int(item))
+
+    bible_variants_dir = paths["preprod"] / "bible_variants"
+    if bible_variants_dir.exists():
+        for p in bible_variants_dir.glob("v*"):
+            if p.is_dir() and p.name[1:].isdigit():
+                variants.add(int(p.name[1:]))
+
+    if not variants:
+        variants.add(int(approval.get("approved_variant", 1) or 1))
+
+    return sorted(variants)
+
+
+def _render_variant_cards(paths: Dict[str, Path], approval: Dict[str, Any], variants: List[int]) -> Dict[str, Any]:
+    st.subheader("Variant Cards")
+    preprod = paths["preprod"]
+    columns_per_row = 4
+
+    for start in range(0, len(variants), columns_per_row):
+        row_variants = variants[start:start + columns_per_row]
+        cols = st.columns(columns_per_row)
+        for col, variant in zip(cols, row_variants):
+            selection = resolve_variant_assets(Path(st.session_state["out_dir"]), variant)
+            with col:
+                with st.container(border=True):
+                    st.markdown("<div class='bf-card'>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='bf-card-title'>Variant v{variant}</div>", unsafe_allow_html=True)
+                    for key, label, folder in [
+                        ("approved_character", "character", "character_options"),
+                        ("approved_style", "style", "style_options"),
+                        ("approved_cover", "cover", "cover_options"),
+                    ]:
+                        filename = selection.get(key)
+                        if filename:
+                            st.image(str(preprod / folder / filename), caption=label, use_container_width=True)
+
+                    variant_dir = preprod / "bible_variants" / f"v{variant}"
+                    prompt_prefix = _snippet(variant_dir / "prompt_prefix.txt", 180)
+                    negative_prompt = _snippet(variant_dir / "negative_prompt.txt", 120)
+                    if prompt_prefix or negative_prompt:
+                        st.markdown("<div class='bf-card-subtle'>Key settings</div>", unsafe_allow_html=True)
+                        if prompt_prefix:
+                            st.caption(f"prefix: {prompt_prefix}")
+                        if negative_prompt:
+                            st.caption(f"negative: {negative_prompt}")
+
+                    anchors = selection.get("anchors", {})
+                    if anchors:
+                        with st.expander("Show anchors"):
+                            for anchor_key, anchor_file in anchors.items():
+                                st.image(str(preprod / "anchor_pack" / anchor_file), caption=anchor_key, use_container_width=True)
+
+                    if st.button(f"Set v{variant} as Approved", key=f"set-approved-v{variant}", type="primary"):
+                        updated = apply_variant_selection_to_approval(approval, selection)
+                        st.session_state["approved_variant"] = int(updated.get("approved_variant", variant))
+                        for session_key in ["approved_character", "approved_style", "approved_cover"]:
+                            if session_key in updated:
+                                st.session_state[session_key] = updated[session_key]
+                        for anchor_key in [
+                            "character_turnaround",
+                            "expression_grid",
+                            "hands_pose",
+                            "palette_tile",
+                            "style_frame",
+                            "cover_concept",
+                        ]:
+                            if anchor_key in updated:
+                                st.session_state[anchor_key] = updated[anchor_key]
+                        st.session_state["approval_draft"] = updated
+                        st.toast(f"Variant v{variant} applied. Review then Save APPROVAL.json.")
+                        st.rerun()
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+    return st.session_state.get("approval_draft", approval)
+
 def _render_approval_gate() -> None:
     st.header("3) Human Approval Gate")
     out_dir = Path(st.session_state["out_dir"])
@@ -276,25 +380,38 @@ def _render_approval_gate() -> None:
         st.info("Run preprod first.")
         return
 
-    approval = _apply_max_fallback_if_needed(read_json(paths["approval"]))
+    base_approval = _apply_max_fallback_if_needed(read_json(paths["approval"]))
+    approval = dict(st.session_state.get("approval_draft", base_approval))
     layout_options = read_json(paths["layout_options"]) if paths["layout_options"].exists() else {}
-
-    variants = sorted([int(p.name[1:]) for p in (paths["preprod"] / "bible_variants").glob("v*") if p.name[1:].isdigit()])
-    approval["approved_variant"] = st.selectbox("approved_variant", options=variants or [1], index=max(0, (variants.index(int(approval.get("approved_variant", 1))) if variants else 0)))
 
     char_files = [p.name for p in list_files(paths["preprod"] / "character_options", "*.png")]
     style_files = [p.name for p in list_files(paths["preprod"] / "style_options", "*.png")]
     cover_files = [p.name for p in list_files(paths["preprod"] / "cover_options", "*.png")]
 
-    def _pick(label: str, options: List[str], current: str) -> str:
-        if not options:
-            return current
-        idx = options.index(current) if current in options else 0
-        return st.selectbox(label, options=options, index=idx)
+    variants = _detect_variant_indices(paths, approval, char_files)
+    approval = _render_variant_cards(paths, approval, variants)
 
-    approval["approved_character"] = _pick("approved_character", char_files, approval.get("approved_character", ""))
-    approval["approved_style"] = _pick("approved_style", style_files, approval.get("approved_style", ""))
-    approval["approved_cover"] = _pick("approved_cover", cover_files, approval.get("approved_cover", ""))
+    if "approved_variant" not in st.session_state:
+        st.session_state["approved_variant"] = int(approval.get("approved_variant", variants[0] if variants else 1))
+    approval["approved_variant"] = st.selectbox(
+        "approved_variant",
+        options=variants or [1],
+        index=max(0, (variants.index(int(st.session_state.get("approved_variant", approval.get("approved_variant", 1)))) if variants else 0)),
+        key="approved_variant",
+    )
+
+    def _pick(label: str, options: List[str], current: str) -> str:
+        if label not in st.session_state:
+            st.session_state[label] = current
+        if not options:
+            return str(st.session_state.get(label, current))
+        cur = str(st.session_state.get(label, current))
+        idx = options.index(cur) if cur in options else 0
+        return st.selectbox(label, options=options, index=idx, key=label)
+
+    approval["approved_character"] = _pick("approved_character", char_files, str(approval.get("approved_character", "")))
+    approval["approved_style"] = _pick("approved_style", style_files, str(approval.get("approved_style", "")))
+    approval["approved_cover"] = _pick("approved_cover", cover_files, str(approval.get("approved_cover", "")))
 
     for key, section in [
         ("interior_layout_preset", "interior_layout_presets"),
@@ -345,6 +462,8 @@ def _render_approval_gate() -> None:
         risk = float(da.get("read_aloud_fatigue_risk", {}).get("score", 0.0) or 0.0)
         if risk >= 0.6:
             st.warning("High read-aloud fatigue risk detected in editorial analysis.")
+
+    st.session_state["approval_draft"] = approval
 
     if st.button("Save APPROVAL.json"):
         write_json(paths["approval"], approval)
