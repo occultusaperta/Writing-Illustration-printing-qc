@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import zipfile
@@ -14,9 +15,21 @@ from bookforge.layout.presets import COVER_LAYOUT_PRESETS, INTERIOR_LAYOUT_PRESE
 from bookforge.qc.image_qc import choose_best_variant, write_qa_report
 from bookforge.qc.kdp_preflight import KDPPreflight
 from bookforge.review.contact_sheet import generate_contact_sheet
+from bookforge.review.proof_pack import generate_proof_pack, write_production_report
+from bookforge.story.back_matter import generate_blurb_options
+from bookforge.story.prompt_compiler import compile_prompt, tighten_prompt
 from bookforge.story.story_spec import build_bible_variants, parse_story
 from bookforge.story.storyboard import generate_storyboard
 
+
+def _seed_from_lock(title: str, author: str, approved_variant: int) -> int:
+    payload = f"{title}|{author}|{approved_variant}".encode("utf-8")
+    return int(hashlib.sha256(payload).hexdigest()[:8], 16)
+
+
+def _cache_key(prompt: str, endpoint: str, seed: int, size: tuple[int, int]) -> str:
+    payload = f"{prompt}|{endpoint}|{seed}|{size[0]}x{size[1]}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _parse_spread_pairs(spreads: Dict[str, Any], page_count: int) -> List[Tuple[int, int]]:
@@ -125,6 +138,8 @@ class BookforgePipeline:
         (preprod / "story_parsed.json").write_text(json.dumps(parsed, indent=2), encoding="utf-8")
         (preprod / "storyboard.json").write_text(json.dumps(storyboard, indent=2), encoding="utf-8")
         bible_variants = build_bible_variants(parsed, variants=variants)
+        blurb_options = generate_blurb_options(parsed, n=5)
+        (preprod / "blurb_options.json").write_text(json.dumps(blurb_options, indent=2), encoding="utf-8")
 
         for variant in bible_variants:
             folder = preprod / "bible_variants" / f"v{variant['variant']}"
@@ -190,6 +205,14 @@ class BookforgePipeline:
             "max_border_bar_score": 0.25,
             "min_style_hist_similarity": 0.65,
             "max_page_to_page_hist_drift": 0.45,
+            "max_text_likelihood": 0.15,
+            "max_watermark_likelihood": 0.15,
+            "max_logo_likelihood": 0.20,
+            "max_border_artifact_score": 0.25,
+            "max_face_like_regions": 3,
+            "approved_blurb_index": 0,
+            "approved_subtitle_index": 0,
+            "back_blurb_enabled": True,
             "notes": "",
         }
         (preprod / "APPROVAL.json").write_text(json.dumps(approval, indent=2), encoding="utf-8")
@@ -207,8 +230,10 @@ class BookforgePipeline:
         if not vv.exists():
             raise RuntimeError(f"Missing chosen bible variant folder: {vv}")
         storyboard_path = preprod / "storyboard.json"
+        parsed_story_path = preprod / "story_parsed.json"
         if not storyboard_path.exists():
             raise RuntimeError("Missing storyboard.json in preprod.")
+        parsed_story = json.loads(parsed_story_path.read_text(encoding="utf-8")) if parsed_story_path.exists() else {"title": "book", "author": "author"}
 
         approved_character = preprod / "character_options" / approval["approved_character"]
         approved_style = preprod / "style_options" / approval["approved_style"]
@@ -219,6 +244,9 @@ class BookforgePipeline:
 
         trim_w, trim_h = parse_trim_size(size)
         required_pixels = [int((trim_w + 2 * self.bleed_in) * 300), int((trim_h + 2 * self.bleed_in) * 300)]
+        blurb_options = json.loads((preprod / "blurb_options.json").read_text(encoding="utf-8")) if (preprod / "blurb_options.json").exists() else {"blurbs": [], "subtitles": []}
+        blurbs = blurb_options.get("blurbs", [])
+        subtitles = blurb_options.get("subtitles", [])
         spine_w = max(float(approval["spine_min_in"]), page_count * float(approval["paper_thickness_in"]))
         cover_preset = get_preset(approval["cover_layout_preset"], "cover")
 
@@ -238,13 +266,20 @@ class BookforgePipeline:
             "print": {"trim_size": size, "bleed_in": self.bleed_in, "safe_in": self.safe_in, "dpi": 300, "page_count": page_count, "required_pixels": required_pixels},
             "cover": {"paper_thickness_in": float(approval["paper_thickness_in"]), "spine_min_in": float(approval["spine_min_in"]), "spine_w_in": spine_w, "barcode_box_in": cover_preset["barcode_box_in"], "spine_text_min_in": 0.10},
             "fal": {"endpoint": approval.get("fal_endpoint", "https://fal.run/fal-ai/flux/schnell"), "steps": int(approval["image_steps"]), "page_variants": int(approval["page_variants"])},
-            "qa": {k: approval[k] for k in ["qa_profile", "max_regen_rounds", "min_sharpness", "min_entropy", "min_contrast", "max_border_bar_score", "min_style_hist_similarity", "max_page_to_page_hist_drift"]},
+            "qa": {k: approval[k] for k in ["qa_profile", "max_regen_rounds", "min_sharpness", "min_entropy", "min_contrast", "max_border_bar_score", "min_style_hist_similarity", "max_page_to_page_hist_drift", "max_text_likelihood", "max_watermark_likelihood", "max_logo_likelihood", "max_border_artifact_score", "max_face_like_regions"]},
             "spreads": {
                 "mode": approval.get("spread_mode", "none"),
                 "pairs": approval.get("spread_pairs", []),
             },
             "checkpoint": {"pages": int(approval.get("checkpoint_pages", 2))},
+            "back_matter": {
+                "enabled": bool(approval.get("back_blurb_enabled", True)),
+                "blurb": (blurbs[int(approval.get("approved_blurb_index", 0))] if blurbs else ""),
+                "subtitle": (subtitles[int(approval.get("approved_subtitle_index", 0))] if subtitles else ""),
+            },
         }
+        base_seed = _seed_from_lock(parsed_story.get("title", "book"), parsed_story.get("author", "author"), lock["approved_variant"])
+        lock["seeds"] = {"base_seed": base_seed, "per_page_seed": {str(i): base_seed + i * 101 for i in range(1, page_count + 1)}}
         if not lock["spreads"]["pairs"] and approval.get("spread_pages"):
             pages = approval.get("spread_pages", [])
             if isinstance(pages, list) and len(pages) >= 2:
@@ -280,8 +315,7 @@ class BookforgePipeline:
         prompts = []
         for p in parsed["pages"]:
             sb = storyboard_pages.get(p["page_number"], {})
-            sfx = f" camera:{sb.get('camera','medium')} emotion:{sb.get('emotion','warm')} setting:{sb.get('setting','storybook world')}"
-            prompt = f"{lock['locked_prompt_prefix']} Scene: {p['text']}. {sfx}. {lock['locked_negative_prompt']}"
+            prompt = compile_prompt(lock, p["text"], sb)
             prompts.append({"page_number": p["page_number"], "prompt": prompt})
 
         checkpoint_pages = int(lock.get("checkpoint", {}).get("pages", 0))
@@ -311,6 +345,7 @@ class BookforgePipeline:
         (out / "prompts.json").write_text(json.dumps({"prompts": prompts, "checkpoint": checkpoint_summary}, indent=2), encoding="utf-8")
 
         ill = FalFluxIllustrator(endpoint=lock["fal"]["endpoint"])
+        page_seeds = {int(k): int(v) for k, v in lock.get("seeds", {}).get("per_page_seed", {}).items()}
         generated = ill.generate_page_variants(
             prompts,
             out / "images" / "variants",
@@ -320,6 +355,8 @@ class BookforgePipeline:
             Path(lock["approved_style"]),
             Path(lock["approved_style"]).with_name(f"palette_tile_v{lock['approved_variant']}.png"),
             lock["fal"]["steps"],
+            seeds=page_seeds,
+            cache_dir=out / "cache",
         )
 
         selected, upscaled_pages, qa_attempts = [], [], []
@@ -340,8 +377,8 @@ class BookforgePipeline:
             while ((not qa["passes"]) or needs_forced_regen) and rounds < lock["qa"]["max_regen_rounds"]:
                 rounds += 1
                 needs_forced_regen = False
-                hard_prompt += " single main character only, hands fully visible, no extra characters, clean anatomy"
-                regen = ill.generate_page_variants([{"page_number": no, "prompt": hard_prompt}], out / "images" / "variants", (req_w, req_h), lock["fal"]["page_variants"], Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"])
+                hard_prompt = tighten_prompt(hard_prompt, ["anatomy", "artifact", "text"])
+                regen = ill.generate_page_variants([{"page_number": no, "prompt": hard_prompt}], out / "images" / "variants", (req_w, req_h), lock["fal"]["page_variants"], Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"], seeds={no: page_seeds.get(no, 0) + rounds * 1000}, cache_dir=out / "cache")
                 regen_variants = _order_variants([Path(p) for p in regen["variants"][no]], variant_pref.get(no))
                 best_path, qa = choose_best_variant(regen_variants, lock["qa"], Path(lock["approved_style"]), prev_ref)
                 qa_attempts.append({"page": no, "attempt": rounds + 1, **qa})
@@ -369,7 +406,7 @@ class BookforgePipeline:
             spread_path: Path | None = None
             while not spread_ok and spread_round <= lock["qa"]["max_regen_rounds"]:
                 spread_round += 1
-                spread = ill.generate_page_variants([{"page_number": a, "prompt": spread_prompt}], out / "images" / "variants", (req_w * 2, req_h), 1, Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"])
+                spread = ill.generate_page_variants([{"page_number": a, "prompt": spread_prompt}], out / "images" / "variants", (req_w * 2, req_h), 1, Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"], seeds={a: page_seeds.get(a, 0)}, cache_dir=out / "cache")
                 spread_path = Path(spread["variants"][a][0])
                 _, spread_qa = choose_best_variant([spread_path], lock["qa"], Path(lock["approved_style"]), None)
                 qa_attempts.append({"page": f"{a}-{b}", "attempt": spread_round, "spread": True, **spread_qa})
@@ -390,16 +427,23 @@ class BookforgePipeline:
         cover = out / "cover_wrap.pdf"
         guides = out / "cover_guides.pdf"
         engine.render_interior(parsed["pages"], selected, interior, size, self.bleed_in, self.safe_in, get_preset(lock["interior_layout_preset"], "interior"), get_preset(lock["typography_preset"], "typography"))
-        engine.render_cover_wrap(cover, guides, trim_w, trim_h, self.bleed_in, self.safe_in, len(parsed["pages"]), lock["cover"]["spine_w_in"], parsed["title"], parsed["author"], Path(lock["approved_cover"]), Path(lock["approved_style"]), get_preset(lock["cover_layout_preset"], "cover"), lock["cover"])
+        cover_config = dict(lock["cover"])
+        cover_config["subtitle"] = lock.get("back_matter", {}).get("subtitle", "")
+        cover_config["back_blurb"] = lock.get("back_matter", {}).get("blurb", "") if lock.get("back_matter", {}).get("enabled", True) else ""
+        engine.render_cover_wrap(cover, guides, trim_w, trim_h, self.bleed_in, self.safe_in, len(parsed["pages"]), lock["cover"]["spine_w_in"], parsed["title"], parsed["author"], Path(lock["approved_cover"]), Path(lock["approved_style"]), get_preset(lock["cover_layout_preset"], "cover"), cover_config)
 
         preflight = KDPPreflight().run(interior, cover, selected, trim_w, trim_h, self.bleed_in, len(parsed["pages"]), lock["cover"]["spine_w_in"], upscaled_pages, lock["cover"], self.safe_in)
         (out / "preflight_report.json").write_text(json.dumps(preflight, indent=2), encoding="utf-8")
 
         review = out / "review"
         generate_contact_sheet([Path(p) for p in selected], review / "contact_sheet.pdf")
-        write_qa_report(review / "qa_report.json", {"attempts": qa_attempts, "profile": lock["qa"], "checkpoint_overrides_applied": checkpoint_summary})
+        cache_hits = generated.get("cache_hits", {})
+        write_qa_report(review / "qa_report.json", {"attempts": qa_attempts, "profile": lock["qa"], "checkpoint_overrides_applied": checkpoint_summary, "cache_hits": cache_hits})
         if spread_pairs:
             generate_contact_sheet([Path(p) for p in selected], review / "spread_preview.pdf", columns=2)
+        proof_meta = {"trim": size, "dpi": lock["print"]["dpi"], "cover_preset": lock["cover_layout_preset"], "interior_preset": lock["interior_layout_preset"], "endpoint": lock["fal"]["endpoint"]}
+        generate_proof_pack(review / "proof_pack.pdf", cover, [Path(p) for p in selected], proof_meta, qa_attempts)
+        write_production_report(review / "production_report.json", {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {})}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary})
 
         zip_path = out / "bookforge_package.zip"
         self._create_package(zip_path, out)

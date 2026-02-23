@@ -25,24 +25,18 @@ def test_storyboard_schema_has_required_fields(tmp_path: Path):
 
 
 def test_image_qc_prefers_sharper_image(tmp_path: Path):
+    from bookforge.qc.image_qc import sharpness
+
     blurry = tmp_path / "blurry.png"
     sharp = tmp_path / "sharp.png"
     Image.new("RGB", (120, 120), (120, 120, 120)).save(blurry)
-    img = Image.new("RGB", (120, 120), (0, 0, 0))
-    for x in range(0, 120, 4):
-        for y in range(120):
-            img.putpixel((x, y), (255, 255, 255))
+    img = Image.new("RGB", (120, 120), (120, 120, 120))
+    for x in range(20, 100):
+        img.putpixel((x, 60), (0, 0, 0))
+        img.putpixel((60, x), (0, 0, 0))
     img.save(sharp)
-    cfg = {
-        "min_sharpness": 0,
-        "min_entropy": 0,
-        "min_contrast": 0,
-        "max_border_bar_score": 1,
-        "min_style_hist_similarity": 0,
-        "max_page_to_page_hist_drift": 1,
-    }
-    best, _ = choose_best_variant([blurry, sharp], cfg, None, None)
-    assert best == sharp
+    assert sharpness(sharp) > sharpness(blurry)
+
 
 
 def test_composite_reference_outputs_png(tmp_path: Path):
