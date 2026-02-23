@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Tuple
 
 from PIL import Image, ImageDraw
 
+from bookforge.illustration.color_grade import add_sharpen_and_grain, grade_image
+
 from bookforge.illustration.fal_flux import FalFluxIllustrator
 from bookforge.layout.pdf import PDFLayoutEngine, parse_trim_size
 from bookforge.layout.presets import COVER_LAYOUT_PRESETS, INTERIOR_LAYOUT_PRESETS, TYPOGRAPHY_PRESETS, get_preset, presets_payload
@@ -210,6 +212,14 @@ class BookforgePipeline:
             "max_logo_likelihood": 0.20,
             "max_border_artifact_score": 0.25,
             "max_face_like_regions": 3,
+            "max_focus_bleed_overlap": 0.15,
+            "color_grade_mode": "match_style",
+            "color_grade_strength": 0.35,
+            "sharpen_amount": 0.15,
+            "grain_amount": 0.05,
+            "pdf_image_embed": "jpeg",
+            "pdf_jpeg_quality": 92,
+            "preflight_max_interior_mb": 300,
             "approved_blurb_index": 0,
             "approved_subtitle_index": 0,
             "back_blurb_enabled": True,
@@ -266,7 +276,9 @@ class BookforgePipeline:
             "print": {"trim_size": size, "bleed_in": self.bleed_in, "safe_in": self.safe_in, "dpi": 300, "page_count": page_count, "required_pixels": required_pixels},
             "cover": {"paper_thickness_in": float(approval["paper_thickness_in"]), "spine_min_in": float(approval["spine_min_in"]), "spine_w_in": spine_w, "barcode_box_in": cover_preset["barcode_box_in"], "spine_text_min_in": 0.10},
             "fal": {"endpoint": approval.get("fal_endpoint", "https://fal.run/fal-ai/flux/schnell"), "steps": int(approval["image_steps"]), "page_variants": int(approval["page_variants"])},
-            "qa": {k: approval[k] for k in ["qa_profile", "max_regen_rounds", "min_sharpness", "min_entropy", "min_contrast", "max_border_bar_score", "min_style_hist_similarity", "max_page_to_page_hist_drift", "max_text_likelihood", "max_watermark_likelihood", "max_logo_likelihood", "max_border_artifact_score", "max_face_like_regions"]},
+            "qa": {k: approval[k] for k in ["qa_profile", "max_regen_rounds", "min_sharpness", "min_entropy", "min_contrast", "max_border_bar_score", "min_style_hist_similarity", "max_page_to_page_hist_drift", "max_text_likelihood", "max_watermark_likelihood", "max_logo_likelihood", "max_border_artifact_score", "max_face_like_regions", "max_focus_bleed_overlap"]},
+            "post": {"color_grade_mode": approval.get("color_grade_mode", "match_style"), "color_grade_strength": float(approval.get("color_grade_strength", 0.35)), "sharpen_amount": float(approval.get("sharpen_amount", 0.15)), "grain_amount": float(approval.get("grain_amount", 0.05))},
+            "pdf": {"image_embed": approval.get("pdf_image_embed", "jpeg"), "jpeg_quality": int(approval.get("pdf_jpeg_quality", 92)), "max_interior_mb": float(approval.get("preflight_max_interior_mb", 300))},
             "spreads": {
                 "mode": approval.get("spread_mode", "none"),
                 "pairs": approval.get("spread_pairs", []),
@@ -296,6 +308,58 @@ class BookforgePipeline:
             half = w // 2
             im.crop((0, 0, half, h)).save(left_out, "PNG")
             im.crop((half, 0, w, h)).save(right_out, "PNG")
+
+
+    def _postprocess_variant(self, src: Path, dst: Path, style_ref: Path, lock: Dict[str, Any]) -> None:
+        post = lock.get("post", {})
+        mode = str(post.get("color_grade_mode", "match_style"))
+        strength = float(post.get("color_grade_strength", 0.35))
+        sharpen = float(post.get("sharpen_amount", 0.15))
+        grain = float(post.get("grain_amount", 0.05))
+        palette = lock.get("style_bible", {}).get("palette", [])
+        graded = grade_image(src, style_ref, palette, mode=mode, strength=strength)
+        final = add_sharpen_and_grain(graded, sharpen_amount=sharpen, grain_amount=grain)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        final.save(dst, "PNG")
+
+    def _write_quality_summary(self, out: Path, qa_attempts: List[Dict[str, Any]], cache_hits: Dict[int, List[bool]], lock: Dict[str, Any]) -> Path:
+        review = out / "review"
+        review.mkdir(parents=True, exist_ok=True)
+        summary_path = review / "quality_summary.md"
+        best_by_page: Dict[str, Dict[str, Any]] = {}
+        regenerated = set()
+        integrity = set()
+        for item in qa_attempts:
+            page = str(item.get("page"))
+            attempt = int(item.get("attempt", 1))
+            if attempt > 1 and page.isdigit():
+                regenerated.add(int(page))
+            best = item.get("best", {})
+            if page.isdigit() and (page not in best_by_page or attempt >= int(best_by_page[page].get("attempt", 0))):
+                best_by_page[page] = {"attempt": attempt, "score": float(best.get("sharpness", 0.0) + best.get("contrast", 0.0) + best.get("entropy", 0.0)), "integrity": best}
+            if best.get("text_likelihood", 0) > lock["qa"]["max_text_likelihood"] or best.get("watermark_likelihood", 0) > lock["qa"]["max_watermark_likelihood"] or best.get("logo_likelihood", 0) > lock["qa"]["max_logo_likelihood"]:
+                if page.isdigit():
+                    integrity.add(int(page))
+
+        worst = sorted(((int(k), v["score"]) for k, v in best_by_page.items()), key=lambda x: x[1])[:5]
+        total = sum(len(v) for v in cache_hits.values())
+        hits = sum(1 for vv in cache_hits.values() for b in vv if b)
+        rate = (hits / total) if total else 0.0
+
+        lines = [
+            "# Quality Summary",
+            "",
+            "## Top 5 Worst Pages by QA Score",
+        ]
+        if worst:
+            lines.extend([f"- Page {p}: score {score:.2f}" for p, score in worst])
+        else:
+            lines.append("- None")
+        lines.extend(["", "## Pages Regenerated", *([f"- {p}" for p in sorted(regenerated)] or ["- None"])])
+        lines.extend(["", "## Pages with Integrity Warnings (text/watermark/logo)", *([f"- {p}" for p in sorted(integrity)] or ["- None"])])
+        lines.extend(["", "## Cache Hit Rate", f"- {hits}/{total} ({rate:.1%})"])
+        summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return summary_path
 
     def studio(self, story_path: str, out_dir: str, size: str, pages: int, illustrator: str, require_lock: bool) -> Dict[str, Any]:
         if illustrator == "openai":
@@ -348,7 +412,7 @@ class BookforgePipeline:
         page_seeds = {int(k): int(v) for k, v in lock.get("seeds", {}).get("per_page_seed", {}).items()}
         generated = ill.generate_page_variants(
             prompts,
-            out / "images" / "variants",
+            out / "images" / "variants_raw",
             (req_w, req_h),
             lock["fal"]["page_variants"],
             Path(lock["approved_character"]),
@@ -368,7 +432,12 @@ class BookforgePipeline:
 
         for page in parsed["pages"]:
             no = page["page_number"]
-            variant_paths = _order_variants([Path(p) for p in generated["variants"][no]], variant_pref.get(no))
+            raw_variant_paths = _order_variants([Path(p) for p in generated["variants"][no]], variant_pref.get(no))
+            variant_paths = []
+            for raw_path in raw_variant_paths:
+                graded_path = out / "images" / "variants" / raw_path.name
+                self._postprocess_variant(raw_path, graded_path, Path(lock["approved_style"]), lock)
+                variant_paths.append(graded_path)
             best_path, qa = choose_best_variant(variant_paths, lock["qa"], Path(lock["approved_style"]), prev_ref)
             qa_attempts.append({"page": no, "attempt": 1, **qa})
             rounds = 0
@@ -378,9 +447,16 @@ class BookforgePipeline:
                 rounds += 1
                 needs_forced_regen = False
                 hard_prompt = tighten_prompt(hard_prompt, ["anatomy", "artifact", "text"])
-                regen = ill.generate_page_variants([{"page_number": no, "prompt": hard_prompt}], out / "images" / "variants", (req_w, req_h), lock["fal"]["page_variants"], Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"], seeds={no: page_seeds.get(no, 0) + rounds * 1000}, cache_dir=out / "cache")
-                regen_variants = _order_variants([Path(p) for p in regen["variants"][no]], variant_pref.get(no))
+                regen = ill.generate_page_variants([{"page_number": no, "prompt": hard_prompt}], out / "images" / "variants_raw", (req_w, req_h), lock["fal"]["page_variants"], Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"], seeds={no: page_seeds.get(no, 0) + rounds * 1000}, cache_dir=out / "cache")
+                regen_raw = _order_variants([Path(p) for p in regen["variants"][no]], variant_pref.get(no))
+                regen_variants = []
+                for raw_path in regen_raw:
+                    graded_path = out / "images" / "variants" / raw_path.name
+                    self._postprocess_variant(raw_path, graded_path, Path(lock["approved_style"]), lock)
+                    regen_variants.append(graded_path)
                 best_path, qa = choose_best_variant(regen_variants, lock["qa"], Path(lock["approved_style"]), prev_ref)
+                if qa.get("best", {}).get("focus_bleed_overlap", 0.0) > lock["qa"].get("max_focus_bleed_overlap", 0.15):
+                    hard_prompt = f"{hard_prompt} subject centered within safe area, keep key action away from edges"
                 qa_attempts.append({"page": no, "attempt": rounds + 1, **qa})
 
             dst = selected_dir / f"page_{no:03d}.png"
@@ -406,9 +482,11 @@ class BookforgePipeline:
             spread_path: Path | None = None
             while not spread_ok and spread_round <= lock["qa"]["max_regen_rounds"]:
                 spread_round += 1
-                spread = ill.generate_page_variants([{"page_number": a, "prompt": spread_prompt}], out / "images" / "variants", (req_w * 2, req_h), 1, Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"], seeds={a: page_seeds.get(a, 0)}, cache_dir=out / "cache")
+                spread = ill.generate_page_variants([{"page_number": a, "prompt": spread_prompt}], out / "images" / "variants_raw", (req_w * 2, req_h), 1, Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"], seeds={a: page_seeds.get(a, 0)}, cache_dir=out / "cache")
                 spread_path = Path(spread["variants"][a][0])
-                _, spread_qa = choose_best_variant([spread_path], lock["qa"], Path(lock["approved_style"]), None)
+                spread_graded = out / "images" / "variants" / spread_path.name
+                self._postprocess_variant(spread_path, spread_graded, Path(lock["approved_style"]), lock)
+                _, spread_qa = choose_best_variant([spread_graded], lock["qa"], Path(lock["approved_style"]), None)
                 qa_attempts.append({"page": f"{a}-{b}", "attempt": spread_round, "spread": True, **spread_qa})
                 if not spread_qa["passes"]:
                     continue
@@ -426,31 +504,33 @@ class BookforgePipeline:
         interior = out / "interior.pdf"
         cover = out / "cover_wrap.pdf"
         guides = out / "cover_guides.pdf"
-        engine.render_interior(parsed["pages"], selected, interior, size, self.bleed_in, self.safe_in, get_preset(lock["interior_layout_preset"], "interior"), get_preset(lock["typography_preset"], "typography"))
+        engine.render_interior(parsed["pages"], selected, interior, size, self.bleed_in, self.safe_in, get_preset(lock["interior_layout_preset"], "interior"), get_preset(lock["typography_preset"], "typography"), lock.get("pdf", {}))
         cover_config = dict(lock["cover"])
         cover_config["subtitle"] = lock.get("back_matter", {}).get("subtitle", "")
         cover_config["back_blurb"] = lock.get("back_matter", {}).get("blurb", "") if lock.get("back_matter", {}).get("enabled", True) else ""
         engine.render_cover_wrap(cover, guides, trim_w, trim_h, self.bleed_in, self.safe_in, len(parsed["pages"]), lock["cover"]["spine_w_in"], parsed["title"], parsed["author"], Path(lock["approved_cover"]), Path(lock["approved_style"]), get_preset(lock["cover_layout_preset"], "cover"), cover_config)
 
-        preflight = KDPPreflight().run(interior, cover, selected, trim_w, trim_h, self.bleed_in, len(parsed["pages"]), lock["cover"]["spine_w_in"], upscaled_pages, lock["cover"], self.safe_in)
+        preflight = KDPPreflight().run(interior, cover, selected, trim_w, trim_h, self.bleed_in, len(parsed["pages"]), lock["cover"]["spine_w_in"], upscaled_pages, lock["cover"], self.safe_in, float(lock.get("pdf", {}).get("max_interior_mb", 300)))
         (out / "preflight_report.json").write_text(json.dumps(preflight, indent=2), encoding="utf-8")
 
         review = out / "review"
         generate_contact_sheet([Path(p) for p in selected], review / "contact_sheet.pdf")
         cache_hits = generated.get("cache_hits", {})
-        write_qa_report(review / "qa_report.json", {"attempts": qa_attempts, "profile": lock["qa"], "checkpoint_overrides_applied": checkpoint_summary, "cache_hits": cache_hits})
+        cache_keys = generated.get("cache_keys", {})
+        write_qa_report(review / "qa_report.json", {"attempts": qa_attempts, "profile": lock["qa"], "checkpoint_overrides_applied": checkpoint_summary, "cache_hits": cache_hits, "cache_keys": cache_keys, "post": lock.get("post", {})})
         if spread_pairs:
             generate_contact_sheet([Path(p) for p in selected], review / "spread_preview.pdf", columns=2)
         proof_meta = {"trim": size, "dpi": lock["print"]["dpi"], "cover_preset": lock["cover_layout_preset"], "interior_preset": lock["interior_layout_preset"], "endpoint": lock["fal"]["endpoint"]}
         generate_proof_pack(review / "proof_pack.pdf", cover, [Path(p) for p in selected], proof_meta, qa_attempts)
-        write_production_report(review / "production_report.json", {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {})}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary})
+        write_production_report(review / "production_report.json", {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {})}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary})
+        self._write_quality_summary(out, qa_attempts, cache_hits, lock)
 
         zip_path = out / "bookforge_package.zip"
         self._create_package(zip_path, out)
         return {"status": preflight["status"], "out_dir": str(out), "zip": str(zip_path)}
 
     def _create_package(self, zip_path: Path, out: Path) -> None:
-        include = ["interior.pdf", "cover_wrap.pdf", "cover_guides.pdf", "preflight_report.json", "LOCK.json", "prompts.json"]
+        include = ["interior.pdf", "cover_wrap.pdf", "cover_guides.pdf", "preflight_report.json", "LOCK.json", "prompts.json", "review/quality_summary.md"]
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for rel in include:
                 path = out / rel

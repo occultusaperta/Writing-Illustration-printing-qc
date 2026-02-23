@@ -73,6 +73,7 @@ def main() -> int:
         OUT_DIR / "review" / "qa_report.json",
         OUT_DIR / "review" / "proof_pack.pdf",
         OUT_DIR / "review" / "production_report.json",
+        OUT_DIR / "review" / "quality_summary.md",
     ]
     missing = [str(p) for p in expected if not p.exists()]
     if missing:
@@ -90,10 +91,22 @@ def main() -> int:
     if "cache_hits" not in qa_report:
         print("Smoke run failed; qa_report missing cache_hits")
         return 1
+    if "cache_keys" not in qa_report:
+        print("Smoke run failed; qa_report missing cache_keys")
+        return 1
     first_attempt = qa_report.get("attempts", [{}])[0].get("best", {}) if qa_report.get("attempts") else {}
     required_integrity = {"text_likelihood", "watermark_likelihood", "logo_likelihood", "border_artifact_score"}
     if first_attempt and not required_integrity.issubset(set(first_attempt.keys())):
         print("Smoke run failed; integrity metrics missing from qa_report")
+        return 1
+
+    if not (OUT_DIR / "images" / "variants_raw").exists():
+        print("Smoke run failed; variants_raw missing")
+        return 1
+
+    production = json.loads((OUT_DIR / "review" / "production_report.json").read_text(encoding="utf-8"))
+    if "post" not in production:
+        print("Smoke run failed; production_report missing post fields")
         return 1
 
     if approval.get("spread_mode", "none") != "none":

@@ -41,6 +41,39 @@ class FalFluxIllustrator:
             out.save(out_path, "PNG")
         return out_path
 
+    def _hash_file(self, path: Path) -> str:
+        data = path.read_bytes()
+        return hashlib.sha256(data).hexdigest()[:16]
+
+    def _build_cache_key(
+        self,
+        prompt: str,
+        seed: int,
+        image_size_px: tuple[int, int],
+        steps: int,
+        composite_ref: Path | None,
+        reference_image: Path | None,
+    ) -> str:
+        if composite_ref and composite_ref.exists():
+            ref_hash = self._hash_file(composite_ref)
+        elif reference_image and reference_image.exists():
+            ref_hash = self._hash_file(reference_image)
+        else:
+            ref_hash = "none"
+        payload = "|".join(
+            [
+                "v2",
+                prompt,
+                self.endpoint,
+                str(seed),
+                str(image_size_px[0]),
+                str(image_size_px[1]),
+                str(steps),
+                ref_hash,
+            ]
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
     def generate_page_variants(
         self,
         page_prompts: List[Dict[str, Any]],
@@ -61,6 +94,7 @@ class FalFluxIllustrator:
 
         results: Dict[int, List[str]] = {}
         cache_hits: Dict[int, List[bool]] = {}
+        cache_keys: Dict[int, List[str]] = {}
         for entry in page_prompts:
             page_no = int(entry["page_number"])
             prompt = entry["prompt"]
@@ -71,15 +105,16 @@ class FalFluxIllustrator:
                 self.build_composite_reference(reference_image, style_image, composite_ref, palette_tile)
             page_seed = int((seeds or {}).get(page_no, 0)) if seeds else None
             page_hits: List[bool] = []
+            page_keys: List[str] = []
             for variant_idx in range(1, variants + 1):
                 seed = (page_seed + variant_idx - 1) if page_seed is not None else None
                 out = variants_dir / f"page_{page_no:03d}_v{variant_idx}.png"
                 key = None
                 if cache_dir is not None and seed is not None:
                     cache_dir.mkdir(parents=True, exist_ok=True)
-                    payload = f"{prompt}|{self.endpoint}|{seed}|{image_size_px[0]}x{image_size_px[1]}".encode("utf-8")
-                    key = hashlib.sha256(payload).hexdigest()
+                    key = self._build_cache_key(prompt, seed, image_size_px, steps, composite_ref, reference_image)
                     cached = cache_dir / f"{key}.png"
+                    page_keys.append(key)
                     if cached.exists():
                         out.write_bytes(cached.read_bytes())
                         generated.append(str(out))
@@ -101,7 +136,8 @@ class FalFluxIllustrator:
                 page_hits.append(False)
             results[page_no] = generated
             cache_hits[page_no] = page_hits
-        return {"provider": "fal-flux", "variants": results, "endpoint": self.endpoint, "cache_hits": cache_hits}
+            cache_keys[page_no] = page_keys
+        return {"provider": "fal-flux", "variants": results, "endpoint": self.endpoint, "cache_hits": cache_hits, "cache_keys": cache_keys}
 
     def generate_option_image(self, prompt: str, out_path: Path, image_size_px: tuple[int, int], steps: int = 4) -> None:
         fal_key = os.getenv("FAL_KEY", "").strip()
