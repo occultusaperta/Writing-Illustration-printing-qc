@@ -23,3 +23,9 @@ bookforge = "bookforge.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["bookforge*"]
+
+[project.optional-dependencies]
+ui = ["streamlit>=1.30"]
+
+[tool.setuptools.package-data]
+"bookforge.ui" = ["style.css"]

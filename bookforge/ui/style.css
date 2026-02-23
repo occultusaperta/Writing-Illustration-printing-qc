@@ -1,0 +1,30 @@
+:root {
+  --glass-bg: rgba(255, 255, 255, 0.2);
+  --glass-border: rgba(255, 255, 255, 0.45);
+  --card-shadow: 0 10px 28px rgba(31, 38, 135, 0.16);
+}
+
+.stApp {
+  background: radial-gradient(circle at top right, #c7d2fe 0%, #e2e8f0 35%, #f8fafc 100%);
+}
+
+.block-container {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: var(--card-shadow);
+  border-radius: 20px;
+  padding: 1.5rem 2rem;
+}
+
+h1, h2, h3 {
+  color: #0f172a;
+}
+
+[data-testid="stTextArea"] textarea,
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
+[data-testid="stSelectbox"] {
+  border-radius: 12px !important;
+}
