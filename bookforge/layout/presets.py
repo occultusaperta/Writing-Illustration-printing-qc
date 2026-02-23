@@ -46,12 +46,14 @@ INTERIOR_LAYOUT_PRESETS: List[InteriorLayoutPreset] = [
     InteriorLayoutPreset("gallery_panel_top", "Gallery Top", "Top text panel with centered copy for calm story pacing.", "top", 0.30, 16, "center", False),
     InteriorLayoutPreset("storybook_balanced_bottom", "Storybook Balanced", "Balanced lower panel for medium narration density.", "bottom", 0.36, 20, "left", True),
     InteriorLayoutPreset("luxe_caption_top", "Luxe Caption", "Slim top caption treatment with generous margins.", "top", 0.26, 22, "center", False),
+    InteriorLayoutPreset("imprint_image_heavy_bottom_strip", "Imprint Image-Heavy Bottom Strip", "Premium caption strip that preserves art for image-heavy layouts.", "bottom", 0.20, 18, "center", False),
 ]
 
 TYPOGRAPHY_PRESETS: List[TypographyPreset] = [
     TypographyPreset("storybook_large", "Storybook Large", 20, 14, 1.25, 8, "normal"),
     TypographyPreset("storybook_balanced", "Storybook Balanced", 18, 12, 1.3, 10, "normal"),
     TypographyPreset("storybook_compact", "Storybook Compact", 16, 11, 1.28, 12, "tight"),
+    TypographyPreset("imprint_caption_lux", "Imprint Caption Lux", 22, 14, 1.15, 5, "normal"),
 ]
 
 COVER_LAYOUT_PRESETS: List[CoverLayoutPreset] = [
@@ -59,6 +61,7 @@ COVER_LAYOUT_PRESETS: List[CoverLayoutPreset] = [
     CoverLayoutPreset("center_title_spine_if_room", "Centered Title", "Centered title with optional spine text when wide enough.", "auto", "front_bottom", "if_spine_wide", "lower_middle", [0.6, 2.1, 7.0, 4.5], [0.6, 0.6, 2.0, 1.2], "style_blur"),
     CoverLayoutPreset("lower_title_author_top", "Lower Title", "Title near bottom and author near top for dramatic art focus.", "front_bottom", "front_top", "if_spine_wide", "upper_middle", [0.55, 1.9, 7.1, 4.7], [0.6, 0.7, 2.0, 1.2], "style_blur"),
     CoverLayoutPreset("minimal_top_author_bottom", "Minimal Top", "Minimal typographic treatment with clean back panel.", "front_top", "front_bottom", "if_spine_wide", "center", [0.7, 2.0, 6.8, 4.5], [0.7, 0.6, 2.0, 1.2], "solid"),
+    CoverLayoutPreset("imprint_auto_title_safe", "Imprint Auto Title Safe", "Busyness-aware title placement with safe subtitle/blurb handling for premium covers.", "auto", "front_bottom", "if_spine_wide", "upper_middle", [0.6, 2.0, 6.9, 4.4], [0.6, 0.6, 2.0, 1.2], "style_blur"),
 ]
 
 

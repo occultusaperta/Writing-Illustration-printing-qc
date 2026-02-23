@@ -19,8 +19,9 @@ def run(cmd: list[str]) -> None:
 
 
 def main() -> int:
-    if not os.getenv("FAL_KEY", "").strip():
-        print("FAL_KEY not set; skipping smoke run.")
+    fal_key = (os.getenv("FAL_KEY") or os.getenv("Fal_key") or os.getenv("fal_key") or "").strip()
+    if not fal_key:
+        print("FAL_KEY/Fal_key/fal_key not set; skipping smoke run.")
         return 0
 
     if OUT_DIR.exists():

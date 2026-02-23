@@ -87,7 +87,7 @@ class FalFluxIllustrator:
         seeds: Dict[int, int] | None = None,
         cache_dir: Path | None = None,
     ) -> Dict[str, Any]:
-        fal_key = os.getenv("FAL_KEY", "").strip()
+        fal_key = (os.getenv("FAL_KEY") or os.getenv("Fal_key") or os.getenv("fal_key") or "").strip()
         if not fal_key:
             raise RuntimeError("FAL_KEY is required for Fal/Flux illustration provider.")
         variants_dir.mkdir(parents=True, exist_ok=True)
@@ -140,7 +140,7 @@ class FalFluxIllustrator:
         return {"provider": "fal-flux", "variants": results, "endpoint": self.endpoint, "cache_hits": cache_hits, "cache_keys": cache_keys}
 
     def generate_option_image(self, prompt: str, out_path: Path, image_size_px: tuple[int, int], steps: int = 4) -> None:
-        fal_key = os.getenv("FAL_KEY", "").strip()
+        fal_key = (os.getenv("FAL_KEY") or os.getenv("Fal_key") or os.getenv("fal_key") or "").strip()
         if not fal_key:
             raise RuntimeError("FAL_KEY is required for Fal/Flux illustration provider.")
         out_path.parent.mkdir(parents=True, exist_ok=True)
