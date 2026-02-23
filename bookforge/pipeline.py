@@ -15,6 +15,7 @@ from bookforge.illustration.fal_flux import FalFluxIllustrator
 from bookforge.illustration.smart_crop import smart_crop_to_target
 from bookforge.layout.pdf import PDFLayoutEngine, parse_trim_size
 from bookforge.layout.presets import COVER_LAYOUT_PRESETS, INTERIOR_LAYOUT_PRESETS, TYPOGRAPHY_PRESETS, get_preset, presets_payload
+from bookforge.profiles import apply_profile, load_profile
 from bookforge.qc.image_qc import choose_best_variant, write_qa_report
 from bookforge.qc.kdp_preflight import KDPPreflight
 from bookforge.review.contact_sheet import generate_contact_sheet
@@ -104,6 +105,14 @@ def _order_variants(variant_paths: List[Path], preferred_variant: int | None) ->
     return preferred + others
 
 
+def _fal_key_from_env() -> str:
+    import os
+
+    return (os.getenv("FAL_KEY") or os.getenv("Fal_key") or os.getenv("fal_key") or "").strip()
+
+
+
+
 class BookforgePipeline:
     def __init__(self) -> None:
         self.bleed_in = 0.125
@@ -114,7 +123,7 @@ class BookforgePipeline:
     def doctor(self, strict: bool = False) -> Dict[str, Any]:
         import os
 
-        fal = bool(os.getenv("FAL_KEY", "").strip())
+        fal = bool(_fal_key_from_env())
         issues: List[str] = []
         if not fal:
             issues.append("FAL_KEY missing")
@@ -132,12 +141,14 @@ class BookforgePipeline:
             draw.rectangle((i * block, 0, (i + 1) * block, h), fill=c)
         img.save(out_path, "PNG")
 
-    def preprod(self, story_path: str, out_dir: str, size: str, pages: int, variants: int) -> Dict[str, Any]:
+    def preprod(self, story_path: str, out_dir: str, size: str, pages: int, variants: int, profile: str | None = None) -> Dict[str, Any]:
         out = Path(out_dir)
         preprod = out / "preprod"
         (preprod / "bible_variants").mkdir(parents=True, exist_ok=True)
 
-        parsed = parse_story(story_path, pages)
+        profile_dict = load_profile(profile) if profile else {}
+        profile_meta = profile_dict.get("metadata", {}) if isinstance(profile_dict, dict) else {}
+        parsed = parse_story(story_path, pages, max_words_per_page_override=profile_meta.get("max_words_per_page"))
         storyboard = generate_storyboard(parsed, variants)
         (preprod / "story_parsed.json").write_text(json.dumps(parsed, indent=2), encoding="utf-8")
         (preprod / "storyboard.json").write_text(json.dumps(storyboard, indent=2), encoding="utf-8")
@@ -238,6 +249,8 @@ class BookforgePipeline:
             "back_blurb_enabled": True,
             "notes": "",
         }
+        if profile_dict:
+            approval = apply_profile(approval, profile_dict)
         (preprod / "APPROVAL.json").write_text(json.dumps(approval, indent=2), encoding="utf-8")
         return {"status": "PASS", "stage": "preprod", "out_dir": str(out)}
 
@@ -584,8 +597,8 @@ class BookforgePipeline:
         self._create_package(zip_path, out)
         return {"status": preflight["status"], "out_dir": str(out), "zip": str(zip_path)}
 
-    def _create_package(self, zip_path: Path, out: Path) -> None:
-        include = [
+    def _expected_package_artifacts(self) -> List[str]:
+        return [
             "interior.pdf",
             "cover_wrap.pdf",
             "cover_guides.pdf",
@@ -599,6 +612,54 @@ class BookforgePipeline:
             "review/qa_report.json",
             "review/report.html",
         ]
+
+    def verify(self, out_dir: str) -> Dict[str, Any]:
+        out = Path(out_dir)
+        required = self._expected_package_artifacts() + ["review/thumbs"]
+        missing = [rel for rel in required if not (out / rel).exists()]
+        warnings: List[str] = []
+        failures: List[str] = []
+        if missing:
+            failures.append(f"Missing required artifacts: {', '.join(missing)}")
+
+        preflight_path = out / "preflight_report.json"
+        if preflight_path.exists():
+            preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+            if preflight.get("status") == "FAIL":
+                failures.append("preflight_report.json status is FAIL")
+
+        production_path = out / "review" / "production_report.json"
+        if production_path.exists():
+            production = json.loads(production_path.read_text(encoding="utf-8"))
+            post = production.get("post", {})
+            required_post = {"crop_mode", "director_grade_enabled", "tone_curve_preset"}
+            missing_post = sorted(required_post - set(post.keys()))
+            if missing_post:
+                failures.append(f"production_report.json post missing fields: {', '.join(missing_post)}")
+            for field in ["post", "qa_thresholds", "cache_hit_rate"]:
+                if field not in production:
+                    failures.append(f"production_report.json missing {field}")
+
+        zip_path = out / "bookforge_package.zip"
+        if zip_path.exists():
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                names = set(zf.namelist())
+            expected = set(self._expected_package_artifacts())
+            missing_zip = sorted(expected - names)
+            if missing_zip:
+                failures.append(f"bookforge_package.zip missing artifacts: {', '.join(missing_zip)}")
+        else:
+            warnings.append("bookforge_package.zip not found; run studio packaging step")
+
+        status = "PASS"
+        if failures:
+            status = "FAIL"
+        elif warnings:
+            status = "WARN"
+        return {"status": status, "failures": failures, "warnings": warnings}
+
+    def _create_package(self, zip_path: Path, out: Path) -> None:
+        include = self._expected_package_artifacts()
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for rel in include:
                 path = out / rel

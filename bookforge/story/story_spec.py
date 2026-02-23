@@ -47,13 +47,37 @@ def _split_never_empty(text: str, pages: int) -> List[str]:
     return result
 
 
-def parse_story(path: str | Path, pages: int) -> Dict[str, Any]:
+def _split_with_word_limit(text: str, pages: int, max_words_per_page: int) -> List[str]:
+    words = re.findall(r"\S+", text)
+    if not words:
+        raise RuntimeError("Story file is empty.")
+    if len(words) > pages * max_words_per_page:
+        raise RuntimeError(f"Story exceeds layout limit: {len(words)} words for {pages} pages at max_words_per_page={max_words_per_page}.")
+
+    result: List[str] = []
+    idx = 0
+    for page in range(pages):
+        remaining_pages = pages - page
+        remaining_words = len(words) - idx
+        take = max(1, math.ceil(remaining_words / remaining_pages))
+        take = min(take, max_words_per_page)
+        page_words = words[idx : idx + take]
+        if not page_words:
+            page_words = [words[-1]]
+        result.append(" ".join(page_words))
+        idx = min(len(words), idx + take)
+    return result
+
+
+def parse_story(path: str | Path, pages: int, max_words_per_page_override: int | None = None) -> Dict[str, Any]:
     story_path = Path(path)
     raw = story_path.read_text(encoding="utf-8")
     meta, text = _extract_front_matter(raw)
 
     title = meta.get("title") or story_path.stem.replace("_", " ").title()
     author = meta.get("author") or "Internal Studio"
+    meta_limit = int(meta.get("max_words_per_page", "0") or 0)
+    max_words_per_page = int(max_words_per_page_override or meta_limit or 0)
 
     sections = re.split(r"(?:^|\n)##\s*Page\s*\d+[:\-]?", text, flags=re.IGNORECASE)
     explicit = [s.strip() for s in sections if s.strip()]
@@ -65,7 +89,10 @@ def parse_story(path: str | Path, pages: int) -> Dict[str, Any]:
             padded.append(padded[-1])
         page_texts = padded[:pages]
     else:
-        page_texts = _split_never_empty(text, pages)
+        if max_words_per_page > 0:
+            page_texts = _split_with_word_limit(text, pages, max_words_per_page)
+        else:
+            page_texts = _split_never_empty(text, pages)
 
     return {
         "title": title,
@@ -79,6 +106,7 @@ def parse_story(path: str | Path, pages: int) -> Dict[str, Any]:
             "typography_preset": meta.get("typography_preset", "storybook_large"),
             "interior_layout_preset": meta.get("interior_layout_preset", "cinematic_panel_bottom"),
             "cover_layout_preset": meta.get("cover_layout_preset", "front_title_top_back_blurb"),
+            "max_words_per_page": max_words_per_page if max_words_per_page > 0 else None,
         },
     }
 
