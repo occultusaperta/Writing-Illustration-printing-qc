@@ -15,6 +15,15 @@ from bookforge.illustration.fal_flux import FalFluxIllustrator
 from bookforge.illustration.smart_crop import smart_crop_to_target
 from bookforge.layout.pdf import PDFLayoutEngine, parse_trim_size
 from bookforge.layout.presets import COVER_LAYOUT_PRESETS, INTERIOR_LAYOUT_PRESETS, TYPOGRAPHY_PRESETS, get_preset, presets_payload
+from bookforge.editorial.dual_address import analyze_dual_address
+from bookforge.editorial.eye_flow import verify_focus_not_covered_by_panel
+from bookforge.editorial.hidden_artifacts import apply_artifact_plan_to_pages, propose_artifact_options
+from bookforge.editorial.hook_packaging import generate_hook_pack
+from bookforge.editorial.page_turns import build_page_turn_map
+from bookforge.editorial.readaloud_script import generate_readaloud_script
+from bookforge.editorial.report import render_editorial_report_md
+from bookforge.editorial.rhythm_audit import audit_rhythm_and_rhyme
+from bookforge.editorial.trade_dress import generate_trade_dress
 from bookforge.profiles import apply_profile, load_profile
 from bookforge.qc.image_qc import choose_best_variant, write_qa_report
 from bookforge.qc.kdp_preflight import KDPPreflight
@@ -195,6 +204,42 @@ class BookforgePipeline:
         for p in COVER_LAYOUT_PRESETS:
             engine.render_cover_preview(preprod / "cover_previews" / f"cover_preview_{p.id}.pdf", trim_w, trim_h, self.bleed_in, self.safe_in, p)
 
+        story_text = "\n".join([p["text"] for p in parsed["pages"]])
+        age_band = str(parsed.get("metadata", {}).get("age_band", "")).strip() or "6-8"
+        editorial_dir = preprod / "editorial"
+        editorial_dir.mkdir(parents=True, exist_ok=True)
+        dual_address = analyze_dual_address(story_text, age_band)
+        rhythm_report = audit_rhythm_and_rhyme(story_text)
+        hook_pack = generate_hook_pack(story_text, age_band)
+        page_turn_map = build_page_turn_map(parsed["pages"], age_band)
+        artifact_plan_options = propose_artifact_options(age_band, {"motif": "star", "side_character": "tiny firefly", "token": "moon"})
+        readaloud_script = generate_readaloud_script(parsed["pages"], rhythm_report, page_turn_map)
+        trade_dress = generate_trade_dress({}, get_preset(parsed["metadata"].get("cover_layout_preset", COVER_LAYOUT_PRESETS[0].id), "cover"), parsed["metadata"].get("palette", "#F2C14E,#3A506B").split(","))
+        eye_flow_warnings = []
+        for _p in parsed["pages"][:3]:
+            eye_flow_warnings.append(verify_focus_not_covered_by_panel((0.5, 0.9), (0.0, 0.8, 1.0, 1.0)))
+        selected_plan = artifact_plan_options.get("plans", [{}])[0]
+        artifact_map = apply_artifact_plan_to_pages(selected_plan, parsed["pages"]) if selected_plan else []
+        (editorial_dir / "dual_address.json").write_text(json.dumps(dual_address, indent=2), encoding="utf-8")
+        (editorial_dir / "rhythm_report.json").write_text(json.dumps(rhythm_report, indent=2), encoding="utf-8")
+        (editorial_dir / "hook_pack.json").write_text(json.dumps(hook_pack, indent=2), encoding="utf-8")
+        (editorial_dir / "page_turn_map.json").write_text(json.dumps(page_turn_map, indent=2), encoding="utf-8")
+        (editorial_dir / "artifact_plan_options.json").write_text(json.dumps(artifact_plan_options, indent=2), encoding="utf-8")
+        (editorial_dir / "readaloud_script.md").write_text(readaloud_script, encoding="utf-8")
+        (editorial_dir / "trade_dress.json").write_text(json.dumps(trade_dress, indent=2), encoding="utf-8")
+        (editorial_dir / "hidden_artifacts_map.json").write_text(json.dumps(artifact_map, indent=2), encoding="utf-8")
+        render_editorial_report_md(
+            editorial_dir / "editorial_report.md",
+            dual_address,
+            rhythm_report,
+            hook_pack,
+            page_turn_map,
+            {"selected_plan_id": selected_plan.get("plan_id", ""), "artifact_types_used": sorted({a.get('artifact_type', '') for a in artifact_map})},
+            eye_flow_warnings,
+            editorial_dir / "readaloud_script.md",
+            trade_dress,
+        )
+
         approval = {
             "approved": False,
             "approved_variant": 1,
@@ -247,6 +292,12 @@ class BookforgePipeline:
             "approved_blurb_index": 0,
             "approved_subtitle_index": 0,
             "back_blurb_enabled": True,
+            "age_band": age_band if age_band in {"3-5", "6-8", "7-12", "custom"} else "6-8",
+            "editorial_mode": True,
+            "artifact_plan_id": selected_plan.get("plan_id", "plan_1_light"),
+            "artifact_intensity": "light",
+            "readaloud_script_enabled": True,
+            "trade_dress_lock_enabled": True,
             "notes": "",
         }
         if profile_dict:
@@ -328,6 +379,27 @@ class BookforgePipeline:
                 "subtitle": (subtitles[int(approval.get("approved_subtitle_index", 0))] if subtitles else ""),
             },
         }
+        editorial_dir = preprod / "editorial"
+        if editorial_dir.exists():
+            artifact_options = json.loads((editorial_dir / "artifact_plan_options.json").read_text(encoding="utf-8")) if (editorial_dir / "artifact_plan_options.json").exists() else {"plans": []}
+            selected_id = approval.get("artifact_plan_id", "")
+            selected_plan = next((p for p in artifact_options.get("plans", []) if p.get("plan_id") == selected_id), artifact_options.get("plans", [{}])[0])
+            pages_source = json.loads((preprod / "story_parsed.json").read_text(encoding="utf-8")).get("pages", []) if (preprod / "story_parsed.json").exists() else []
+            resolved_map = apply_artifact_plan_to_pages(selected_plan or {}, pages_source) if selected_plan else []
+            lock["editorial"] = {
+                "age_band": approval.get("age_band", "6-8"),
+                "artifact_plan_id": approval.get("artifact_plan_id", ""),
+                "artifact_intensity": approval.get("artifact_intensity", "light"),
+                "readaloud_script_enabled": bool(approval.get("readaloud_script_enabled", True)),
+                "trade_dress_lock_enabled": bool(approval.get("trade_dress_lock_enabled", True)),
+                "editorial_mode": bool(approval.get("editorial_mode", True)),
+                "resolved_artifact_plan": selected_plan,
+                "resolved_artifacts_map": resolved_map,
+                "hook_pack": json.loads((editorial_dir / "hook_pack.json").read_text(encoding="utf-8")) if (editorial_dir / "hook_pack.json").exists() else {},
+                "page_turn_map": json.loads((editorial_dir / "page_turn_map.json").read_text(encoding="utf-8")) if (editorial_dir / "page_turn_map.json").exists() else [],
+            }
+        else:
+            print("WARN: editorial folder missing; continuing for backward compatibility")
         base_seed = _seed_from_lock(parsed_story.get("title", "book"), parsed_story.get("author", "author"), lock["approved_variant"])
         lock["seeds"] = {"base_seed": base_seed, "per_page_seed": {str(i): base_seed + i * 101 for i in range(1, page_count + 1)}}
         if not lock["spreads"]["pairs"] and approval.get("spread_pages"):
@@ -429,9 +501,22 @@ class BookforgePipeline:
         req_w, req_h = lock["print"]["required_pixels"]
 
         prompts = []
+        turn_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("page_turn_map", []) if isinstance(x, dict)}
+        artifact_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("resolved_artifacts_map", []) if isinstance(x, dict)}
         for p in parsed["pages"]:
             sb = storyboard_pages.get(p["page_number"], {})
-            prompt = compile_prompt(lock, p["text"], sb)
+            addendum_parts: List[str] = []
+            turn = turn_map.get(p["page_number"], {})
+            if turn:
+                addendum_parts.append(f"This page sets up: {turn.get('recto_hook', '')}. The reveal comes next page: {turn.get('verso_payoff', '')}.")
+            artifact = artifact_map.get(p["page_number"], {})
+            if artifact:
+                addendum_parts.append(f"Hidden artifact ({artifact.get('artifact_type', 'micro')}): {artifact.get('instruction', '')} Keep subtle. NO text/logos/watermarks.")
+            if lock.get("editorial", {}).get("editorial_mode", True):
+                eye = verify_focus_not_covered_by_panel((0.5, 0.9), (0.0, 0.8, 1.0, 1.0))
+                if eye.get("status") == "warn":
+                    addendum_parts.append("keep key action above caption strip; keep faces away from bottom edge")
+            prompt = compile_prompt(lock, p["text"], sb, addendum=" ".join(addendum_parts))
             prompts.append({"page_number": p["page_number"], "prompt": prompt})
 
         checkpoint_pages = int(lock.get("checkpoint", {}).get("pages", 0))
@@ -576,7 +661,7 @@ class BookforgePipeline:
         cache_keys = generated.get("cache_keys", {})
         if spread_pairs:
             generate_contact_sheet([Path(p) for p in selected], review / "spread_preview.pdf", columns=2)
-        proof_meta = {"trim": size, "dpi": lock["print"]["dpi"], "cover_preset": lock["cover_layout_preset"], "interior_preset": lock["interior_layout_preset"], "endpoint": lock["fal"]["endpoint"]}
+        proof_meta = {"trim": size, "dpi": lock["print"]["dpi"], "cover_preset": lock["cover_layout_preset"], "interior_preset": lock["interior_layout_preset"], "endpoint": lock["fal"]["endpoint"], "age_band": lock.get("editorial", {}).get("age_band", ""), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", ""), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True)}
         generate_proof_pack(review / "proof_pack.pdf", cover, [Path(p) for p in selected], proof_meta, qa_attempts)
         drift_rows = [a.get("best", {}).get("color_drift_vs_style", 0.0) for a in qa_attempts if isinstance(a.get("page"), int)]
         drift_pages = sorted(
@@ -586,11 +671,23 @@ class BookforgePipeline:
         )[:5]
         cache_bools = [hit for arr in cache_hits.values() for hit in arr]
         cache_hit_rate = (sum(1 for x in cache_bools if x) / len(cache_bools)) if cache_bools else 0.0
-        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {})}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate}
+        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {})}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}}
         write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
         qa_payload = {"attempts": qa_attempts, "profile": lock["qa"], "checkpoint_overrides_applied": checkpoint_summary, "cache_hits": cache_hits, "cache_keys": cache_keys, "post": lock.get("post", {})}
         write_qa_report(review / "qa_report.json", qa_payload)
+        preprod_editorial = out / "preprod" / "editorial"
+        if preprod_editorial.exists():
+            for src, dst in [
+                (preprod_editorial / "editorial_report.md", review / "editorial_report.md"),
+                (preprod_editorial / "readaloud_script.md", review / "readaloud_script.md"),
+                (preprod_editorial / "hook_pack.json", review / "hook_pack.json"),
+                (preprod_editorial / "page_turn_map.json", review / "page_turn_map.json"),
+            ]:
+                if src.exists():
+                    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+            resolved = lock.get("editorial", {}).get("resolved_artifacts_map", [])
+            (review / "hidden_artifacts_map.json").write_text(json.dumps(resolved, indent=2), encoding="utf-8")
         generate_html_report(out, [Path(p) for p in selected], qa_payload, production_payload, Path(lock["approved_cover"]))
 
         zip_path = out / "bookforge_package.zip"
@@ -639,6 +736,18 @@ class BookforgePipeline:
             for field in ["post", "qa_thresholds", "cache_hit_rate"]:
                 if field not in production:
                     failures.append(f"production_report.json missing {field}")
+            editorial = production.get("editorial")
+            if editorial:
+                for field in ["age_band", "artifact_intensity", "readaloud_script_enabled"]:
+                    if field not in editorial:
+                        failures.append(f"production_report.json editorial missing {field}")
+
+        review_dir = out / "review"
+        if not (review_dir / "editorial_report.md").exists():
+            warnings.append("Missing review/editorial_report.md")
+        prod = json.loads(production_path.read_text(encoding="utf-8")) if production_path.exists() else {}
+        if prod.get("editorial", {}).get("readaloud_script_enabled", True) and not (review_dir / "readaloud_script.md").exists():
+            warnings.append("Missing review/readaloud_script.md")
 
         zip_path = out / "bookforge_package.zip"
         if zip_path.exists():

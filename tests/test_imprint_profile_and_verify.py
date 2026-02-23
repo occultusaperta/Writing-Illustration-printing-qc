@@ -87,13 +87,16 @@ def test_verify_command_missing_and_pass(tmp_path: Path):
         path = out / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.suffix == ".json":
-            payload = {"status": "PASS"} if path.name == "preflight_report.json" else {"post": {"crop_mode": "smart", "director_grade_enabled": True, "tone_curve_preset": "storybook_lux"}, "qa_thresholds": {}, "cache_hit_rate": 1.0}
+            payload = {"status": "PASS"} if path.name == "preflight_report.json" else {"post": {"crop_mode": "smart", "director_grade_enabled": True, "tone_curve_preset": "storybook_lux"}, "qa_thresholds": {}, "cache_hit_rate": 1.0, "editorial": {"age_band": "6-8", "artifact_intensity": "light", "readaloud_script_enabled": True}}
             path.write_text(json.dumps(payload), encoding="utf-8")
         else:
             path.write_bytes(b"x")
     thumbs = out / "review" / "thumbs"
     thumbs.mkdir(parents=True, exist_ok=True)
     (thumbs / "cover.jpg").write_bytes(b"x")
+
+    (out / "review" / "editorial_report.md").write_text("x", encoding="utf-8")
+    (out / "review" / "readaloud_script.md").write_text("x", encoding="utf-8")
 
     with zipfile.ZipFile(out / "bookforge_package.zip", "w") as zf:
         for rel in required:

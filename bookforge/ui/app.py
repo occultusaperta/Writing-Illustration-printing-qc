@@ -99,6 +99,12 @@ def _preprod_paths(out_dir: Path) -> Dict[str, Path]:
         "layout_options": preprod / "layout_options.json",
         "lock": out_dir / "LOCK.json",
         "checkpoint": out_dir / "CHECKPOINT.json",
+        "editorial_dir": preprod / "editorial",
+        "artifact_options": preprod / "editorial" / "artifact_plan_options.json",
+        "editorial_report": preprod / "editorial" / "editorial_report.md",
+        "readaloud": preprod / "editorial" / "readaloud_script.md",
+        "hook_pack": preprod / "editorial" / "hook_pack.json",
+        "dual_address": preprod / "editorial" / "dual_address.json",
     }
 
 
@@ -299,6 +305,19 @@ def _render_approval_gate() -> None:
         if options:
             approval[key] = _pick(key, options, str(approval.get(key, options[0])))
 
+    approval["age_band"] = st.selectbox("age_band", options=["3-5", "6-8", "7-12", "custom"], index=["3-5", "6-8", "7-12", "custom"].index(str(approval.get("age_band", "6-8")) if str(approval.get("age_band", "6-8")) in {"3-5", "6-8", "7-12", "custom"} else "6-8"))
+    approval["editorial_mode"] = st.checkbox("editorial_mode", value=bool(approval.get("editorial_mode", True)))
+    approval["artifact_intensity"] = st.selectbox("artifact_intensity", options=["light", "medium", "high"], index=["light", "medium", "high"].index(str(approval.get("artifact_intensity", "light")) if str(approval.get("artifact_intensity", "light")) in {"light", "medium", "high"} else "light"))
+    approval["readaloud_script_enabled"] = st.checkbox("readaloud_script_enabled", value=bool(approval.get("readaloud_script_enabled", True)))
+    approval["trade_dress_lock_enabled"] = st.checkbox("trade_dress_lock_enabled", value=bool(approval.get("trade_dress_lock_enabled", True)))
+    artifact_options_path = paths.get("artifact_options")
+    if artifact_options_path and artifact_options_path.exists():
+        plans = read_json(artifact_options_path).get("plans", [])
+        ids = [p.get("plan_id") for p in plans if p.get("plan_id")]
+        if ids:
+            cur = str(approval.get("artifact_plan_id", ids[0]))
+            approval["artifact_plan_id"] = st.selectbox("artifact_plan_id", options=ids, index=ids.index(cur) if cur in ids else 0)
+
     for k in ["page_variants", "image_steps", "max_regen_rounds", "checkpoint_pages", "spread_mode", "crop_mode", "pdf_image_embed", "pdf_jpeg_quality", "director_grade_enabled"]:
         if k not in approval:
             continue
@@ -313,6 +332,19 @@ def _render_approval_gate() -> None:
             approval[k] = st.text_input(k, value=str(v))
 
     _render_estimator(approval, out_dir)
+
+    if paths.get("editorial_report") and paths["editorial_report"].exists():
+        _open_button(paths["editorial_report"], "Open editorial_report.md")
+    if paths.get("readaloud") and paths["readaloud"].exists():
+        _open_button(paths["readaloud"], "Open readaloud_script.md")
+    if paths.get("hook_pack") and paths["hook_pack"].exists():
+        hp = read_json(paths["hook_pack"])
+        st.info(f"Premise: {hp.get('one_sentence_premise','n/a')}\n\nPitch: {hp.get('15_second_pitch','n/a')}")
+    if paths.get("dual_address") and paths["dual_address"].exists():
+        da = read_json(paths["dual_address"])
+        risk = float(da.get("read_aloud_fatigue_risk", {}).get("score", 0.0) or 0.0)
+        if risk >= 0.6:
+            st.warning("High read-aloud fatigue risk detected in editorial analysis.")
 
     if st.button("Save APPROVAL.json"):
         write_json(paths["approval"], approval)

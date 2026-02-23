@@ -106,6 +106,7 @@ def parse_story(path: str | Path, pages: int, max_words_per_page_override: int |
             "typography_preset": meta.get("typography_preset", "storybook_large"),
             "interior_layout_preset": meta.get("interior_layout_preset", "cinematic_panel_bottom"),
             "cover_layout_preset": meta.get("cover_layout_preset", "front_title_top_back_blurb"),
+            "age_band": meta.get("age_band", "6-8"),
             "max_words_per_page": max_words_per_page if max_words_per_page > 0 else None,
         },
     }
