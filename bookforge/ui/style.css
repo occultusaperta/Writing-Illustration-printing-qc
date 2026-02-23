@@ -66,3 +66,25 @@ button:focus, input:focus, textarea:focus, [data-baseweb="select"]:focus-within 
 [data-testid="stTable"] * {
   color: var(--text) !important;
 }
+
+
+.bf-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 16px;
+  padding: 0.25rem;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 10px 28px rgba(0,0,0,0.5);
+}
+
+.bf-card-title {
+  font-weight: 700;
+  font-size: 1.05rem;
+  margin-bottom: 0.4rem;
+}
+
+.bf-card-subtle {
+  color: var(--muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
