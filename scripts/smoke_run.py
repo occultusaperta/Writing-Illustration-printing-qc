@@ -74,6 +74,8 @@ def main() -> int:
         OUT_DIR / "review" / "proof_pack.pdf",
         OUT_DIR / "review" / "production_report.json",
         OUT_DIR / "review" / "quality_summary.md",
+        OUT_DIR / "review" / "report.html",
+        OUT_DIR / "review" / "thumbs",
     ]
     missing = [str(p) for p in expected if not p.exists()]
     if missing:
@@ -95,7 +97,7 @@ def main() -> int:
         print("Smoke run failed; qa_report missing cache_keys")
         return 1
     first_attempt = qa_report.get("attempts", [{}])[0].get("best", {}) if qa_report.get("attempts") else {}
-    required_integrity = {"text_likelihood", "watermark_likelihood", "logo_likelihood", "border_artifact_score"}
+    required_integrity = {"text_likelihood", "watermark_likelihood", "logo_likelihood", "border_artifact_score", "brightness_mean", "out_of_gamut_risk"}
     if first_attempt and not required_integrity.issubset(set(first_attempt.keys())):
         print("Smoke run failed; integrity metrics missing from qa_report")
         return 1
@@ -108,6 +110,16 @@ def main() -> int:
     if "post" not in production:
         print("Smoke run failed; production_report missing post fields")
         return 1
+    for key in ["crop_mode", "director_grade_enabled", "tone_curve_preset"]:
+        if key not in production.get("post", {}):
+            print(f"Smoke run failed; production_report post missing {key}")
+            return 1
+
+    summary_text = (OUT_DIR / "review" / "quality_summary.md").read_text(encoding="utf-8")
+    for section in ["Top Drift Pages", "Cache Hit Rate"]:
+        if section not in summary_text:
+            print(f"Smoke run failed; quality summary missing section {section}")
+            return 1
 
     if approval.get("spread_mode", "none") != "none":
         spread_preview = OUT_DIR / "review" / "spread_preview.pdf"

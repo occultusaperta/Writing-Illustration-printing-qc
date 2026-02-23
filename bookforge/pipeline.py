@@ -10,13 +10,15 @@ from typing import Any, Dict, List, Tuple
 from PIL import Image, ImageDraw
 
 from bookforge.illustration.color_grade import add_sharpen_and_grain, grade_image
-
+from bookforge.illustration.director_grade import apply_director_grade
 from bookforge.illustration.fal_flux import FalFluxIllustrator
+from bookforge.illustration.smart_crop import smart_crop_to_target
 from bookforge.layout.pdf import PDFLayoutEngine, parse_trim_size
 from bookforge.layout.presets import COVER_LAYOUT_PRESETS, INTERIOR_LAYOUT_PRESETS, TYPOGRAPHY_PRESETS, get_preset, presets_payload
 from bookforge.qc.image_qc import choose_best_variant, write_qa_report
 from bookforge.qc.kdp_preflight import KDPPreflight
 from bookforge.review.contact_sheet import generate_contact_sheet
+from bookforge.review.html_report import generate_report as generate_html_report
 from bookforge.review.proof_pack import generate_proof_pack, write_production_report
 from bookforge.story.back_matter import generate_blurb_options
 from bookforge.story.prompt_compiler import compile_prompt, tighten_prompt
@@ -217,6 +219,17 @@ class BookforgePipeline:
             "color_grade_strength": 0.35,
             "sharpen_amount": 0.15,
             "grain_amount": 0.05,
+            "crop_mode": "smart",
+            "director_grade_enabled": True,
+            "tone_curve_preset": "storybook_lux",
+            "tone_curve_strength": 0.35,
+            "paper_texture_strength": 0.08,
+            "paper_texture_scale": 1.0,
+            "global_grade_strength": 0.30,
+            "min_brightness_p05": 15,
+            "max_brightness_p95": 245,
+            "max_out_of_gamut_risk": 0.35,
+            "max_book_palette_drift": 0.45,
             "pdf_image_embed": "jpeg",
             "pdf_jpeg_quality": 92,
             "preflight_max_interior_mb": 300,
@@ -276,8 +289,20 @@ class BookforgePipeline:
             "print": {"trim_size": size, "bleed_in": self.bleed_in, "safe_in": self.safe_in, "dpi": 300, "page_count": page_count, "required_pixels": required_pixels},
             "cover": {"paper_thickness_in": float(approval["paper_thickness_in"]), "spine_min_in": float(approval["spine_min_in"]), "spine_w_in": spine_w, "barcode_box_in": cover_preset["barcode_box_in"], "spine_text_min_in": 0.10},
             "fal": {"endpoint": approval.get("fal_endpoint", "https://fal.run/fal-ai/flux/schnell"), "steps": int(approval["image_steps"]), "page_variants": int(approval["page_variants"])},
-            "qa": {k: approval[k] for k in ["qa_profile", "max_regen_rounds", "min_sharpness", "min_entropy", "min_contrast", "max_border_bar_score", "min_style_hist_similarity", "max_page_to_page_hist_drift", "max_text_likelihood", "max_watermark_likelihood", "max_logo_likelihood", "max_border_artifact_score", "max_face_like_regions", "max_focus_bleed_overlap"]},
-            "post": {"color_grade_mode": approval.get("color_grade_mode", "match_style"), "color_grade_strength": float(approval.get("color_grade_strength", 0.35)), "sharpen_amount": float(approval.get("sharpen_amount", 0.15)), "grain_amount": float(approval.get("grain_amount", 0.05))},
+            "qa": {k: approval[k] for k in ["qa_profile", "max_regen_rounds", "min_sharpness", "min_entropy", "min_contrast", "max_border_bar_score", "min_style_hist_similarity", "max_page_to_page_hist_drift", "max_text_likelihood", "max_watermark_likelihood", "max_logo_likelihood", "max_border_artifact_score", "max_face_like_regions", "max_focus_bleed_overlap", "min_brightness_p05", "max_brightness_p95", "max_out_of_gamut_risk", "max_book_palette_drift"]},
+            "post": {
+                "color_grade_mode": approval.get("color_grade_mode", "match_style"),
+                "color_grade_strength": float(approval.get("color_grade_strength", 0.35)),
+                "sharpen_amount": float(approval.get("sharpen_amount", 0.15)),
+                "grain_amount": float(approval.get("grain_amount", 0.05)),
+                "crop_mode": approval.get("crop_mode", "smart"),
+                "director_grade_enabled": bool(approval.get("director_grade_enabled", True)),
+                "tone_curve_preset": approval.get("tone_curve_preset", "storybook_lux"),
+                "tone_curve_strength": float(approval.get("tone_curve_strength", 0.35)),
+                "paper_texture_strength": float(approval.get("paper_texture_strength", 0.08)),
+                "paper_texture_scale": float(approval.get("paper_texture_scale", 1.0)),
+                "global_grade_strength": float(approval.get("global_grade_strength", 0.30)),
+            },
             "pdf": {"image_embed": approval.get("pdf_image_embed", "jpeg"), "jpeg_quality": int(approval.get("pdf_jpeg_quality", 92)), "max_interior_mb": float(approval.get("preflight_max_interior_mb", 300))},
             "spreads": {
                 "mode": approval.get("spread_mode", "none"),
@@ -310,7 +335,7 @@ class BookforgePipeline:
             im.crop((half, 0, w, h)).save(right_out, "PNG")
 
 
-    def _postprocess_variant(self, src: Path, dst: Path, style_ref: Path, lock: Dict[str, Any]) -> None:
+    def _postprocess_variant(self, src: Path, dst: Path, style_ref: Path, lock: Dict[str, Any], page_no: int) -> None:
         post = lock.get("post", {})
         mode = str(post.get("color_grade_mode", "match_style"))
         strength = float(post.get("color_grade_strength", 0.35))
@@ -318,7 +343,19 @@ class BookforgePipeline:
         grain = float(post.get("grain_amount", 0.05))
         palette = lock.get("style_bible", {}).get("palette", [])
         graded = grade_image(src, style_ref, palette, mode=mode, strength=strength)
-        final = add_sharpen_and_grain(graded, sharpen_amount=sharpen, grain_amount=grain)
+        graded = apply_director_grade(
+            graded,
+            base_seed=int(lock.get("seeds", {}).get("base_seed", 0)),
+            page_no=page_no,
+            enabled=bool(post.get("director_grade_enabled", True)),
+            tone_curve_preset=str(post.get("tone_curve_preset", "storybook_lux")),
+            tone_curve_strength=float(post.get("tone_curve_strength", 0.35)),
+            paper_texture_strength=float(post.get("paper_texture_strength", 0.08)),
+            paper_texture_scale=float(post.get("paper_texture_scale", 1.0)),
+            global_grade_strength=float(post.get("global_grade_strength", 0.30)),
+        )
+        grain_seed = int(lock.get("seeds", {}).get("base_seed", 0)) + int(page_no) * 997
+        final = add_sharpen_and_grain(graded, sharpen_amount=sharpen, grain_amount=grain, grain_seed=grain_seed)
         dst.parent.mkdir(parents=True, exist_ok=True)
         final.save(dst, "PNG")
 
@@ -356,7 +393,9 @@ class BookforgePipeline:
         else:
             lines.append("- None")
         lines.extend(["", "## Pages Regenerated", *([f"- {p}" for p in sorted(regenerated)] or ["- None"])])
+        drift_pages = sorted(((int(k), float(v["integrity"].get("color_drift_vs_style", 0.0))) for k, v in best_by_page.items()), key=lambda x: x[1], reverse=True)[:5]
         lines.extend(["", "## Pages with Integrity Warnings (text/watermark/logo)", *([f"- {p}" for p in sorted(integrity)] or ["- None"])])
+        lines.extend(["", "## Top Drift Pages", *([f"- Page {p}: drift {d:.3f}" for p, d in drift_pages] or ["- None"])])
         lines.extend(["", "## Cache Hit Rate", f"- {hits}/{total} ({rate:.1%})"])
         summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return summary_path
@@ -436,7 +475,7 @@ class BookforgePipeline:
             variant_paths = []
             for raw_path in raw_variant_paths:
                 graded_path = out / "images" / "variants" / raw_path.name
-                self._postprocess_variant(raw_path, graded_path, Path(lock["approved_style"]), lock)
+                self._postprocess_variant(raw_path, graded_path, Path(lock["approved_style"]), lock, no)
                 variant_paths.append(graded_path)
             best_path, qa = choose_best_variant(variant_paths, lock["qa"], Path(lock["approved_style"]), prev_ref)
             qa_attempts.append({"page": no, "attempt": 1, **qa})
@@ -452,7 +491,7 @@ class BookforgePipeline:
                 regen_variants = []
                 for raw_path in regen_raw:
                     graded_path = out / "images" / "variants" / raw_path.name
-                    self._postprocess_variant(raw_path, graded_path, Path(lock["approved_style"]), lock)
+                    self._postprocess_variant(raw_path, graded_path, Path(lock["approved_style"]), lock, no)
                     regen_variants.append(graded_path)
                 best_path, qa = choose_best_variant(regen_variants, lock["qa"], Path(lock["approved_style"]), prev_ref)
                 if qa.get("best", {}).get("focus_bleed_overlap", 0.0) > lock["qa"].get("max_focus_bleed_overlap", 0.15):
@@ -466,11 +505,16 @@ class BookforgePipeline:
                     scale = max(req_w / work.width, req_h / work.height)
                     work = work.resize((math.ceil(work.width * scale), math.ceil(work.height * scale)), Image.Resampling.LANCZOS)
                     upscaled_pages.append(no)
+                crop_mode = str(lock.get("post", {}).get("crop_mode", "smart")).lower()
                 if work.width != req_w or work.height != req_h:
-                    left = (work.width - req_w) // 2
-                    top = (work.height - req_h) // 2
-                    work = work.crop((left, top, left + req_w, top + req_h))
+                    if crop_mode == "smart":
+                        work = smart_crop_to_target(work, req_w, req_h)
+                    else:
+                        left = (work.width - req_w) // 2
+                        top = (work.height - req_h) // 2
+                        work = work.crop((left, top, left + req_w, top + req_h))
                 work.save(dst, "PNG")
+            qa_attempts[-1]["crop_method"] = "smart" if str(lock.get("post", {}).get("crop_mode", "smart")).lower() == "smart" else "center"
             selected.append(str(dst))
             prev_ref = dst
 
@@ -485,7 +529,7 @@ class BookforgePipeline:
                 spread = ill.generate_page_variants([{"page_number": a, "prompt": spread_prompt}], out / "images" / "variants_raw", (req_w * 2, req_h), 1, Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"], seeds={a: page_seeds.get(a, 0)}, cache_dir=out / "cache")
                 spread_path = Path(spread["variants"][a][0])
                 spread_graded = out / "images" / "variants" / spread_path.name
-                self._postprocess_variant(spread_path, spread_graded, Path(lock["approved_style"]), lock)
+                self._postprocess_variant(spread_path, spread_graded, Path(lock["approved_style"]), lock, a)
                 _, spread_qa = choose_best_variant([spread_graded], lock["qa"], Path(lock["approved_style"]), None)
                 qa_attempts.append({"page": f"{a}-{b}", "attempt": spread_round, "spread": True, **spread_qa})
                 if not spread_qa["passes"]:
@@ -517,20 +561,31 @@ class BookforgePipeline:
         generate_contact_sheet([Path(p) for p in selected], review / "contact_sheet.pdf")
         cache_hits = generated.get("cache_hits", {})
         cache_keys = generated.get("cache_keys", {})
-        write_qa_report(review / "qa_report.json", {"attempts": qa_attempts, "profile": lock["qa"], "checkpoint_overrides_applied": checkpoint_summary, "cache_hits": cache_hits, "cache_keys": cache_keys, "post": lock.get("post", {})})
         if spread_pairs:
             generate_contact_sheet([Path(p) for p in selected], review / "spread_preview.pdf", columns=2)
         proof_meta = {"trim": size, "dpi": lock["print"]["dpi"], "cover_preset": lock["cover_layout_preset"], "interior_preset": lock["interior_layout_preset"], "endpoint": lock["fal"]["endpoint"]}
         generate_proof_pack(review / "proof_pack.pdf", cover, [Path(p) for p in selected], proof_meta, qa_attempts)
-        write_production_report(review / "production_report.json", {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {})}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary})
+        drift_rows = [a.get("best", {}).get("color_drift_vs_style", 0.0) for a in qa_attempts if isinstance(a.get("page"), int)]
+        drift_pages = sorted(
+            [{"page": a.get("page"), "drift": float(a.get("best", {}).get("color_drift_vs_style", 0.0))} for a in qa_attempts if isinstance(a.get("page"), int)],
+            key=lambda x: x["drift"],
+            reverse=True,
+        )[:5]
+        cache_bools = [hit for arr in cache_hits.values() for hit in arr]
+        cache_hit_rate = (sum(1 for x in cache_bools if x) / len(cache_bools)) if cache_bools else 0.0
+        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {})}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate}
+        write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
+        qa_payload = {"attempts": qa_attempts, "profile": lock["qa"], "checkpoint_overrides_applied": checkpoint_summary, "cache_hits": cache_hits, "cache_keys": cache_keys, "post": lock.get("post", {})}
+        write_qa_report(review / "qa_report.json", qa_payload)
+        generate_html_report(out, [Path(p) for p in selected], qa_payload, production_payload, Path(lock["approved_cover"]))
 
         zip_path = out / "bookforge_package.zip"
         self._create_package(zip_path, out)
         return {"status": preflight["status"], "out_dir": str(out), "zip": str(zip_path)}
 
     def _create_package(self, zip_path: Path, out: Path) -> None:
-        include = ["interior.pdf", "cover_wrap.pdf", "cover_guides.pdf", "preflight_report.json", "LOCK.json", "prompts.json", "review/quality_summary.md"]
+        include = ["interior.pdf", "cover_wrap.pdf", "cover_guides.pdf", "preflight_report.json", "LOCK.json", "prompts.json", "review/quality_summary.md", "review/proof_pack.pdf", "review/production_report.json", "review/qa_report.json", "review/report.html"]
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for rel in include:
                 path = out / rel
@@ -538,3 +593,8 @@ class BookforgePipeline:
                     zf.write(path, arcname=rel)
             for p in (out / "images").rglob("*.png"):
                 zf.write(p, arcname=str(p.relative_to(out)))
+            thumbs = out / "review" / "thumbs"
+            if thumbs.exists():
+                for p in thumbs.rglob("*"):
+                    if p.is_file():
+                        zf.write(p, arcname=str(p.relative_to(out)))
