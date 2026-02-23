@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import tempfile
+
+import numpy as np
 from typing import Any, Dict, List, Tuple
 
 from PIL import Image, ImageFilter
@@ -82,6 +84,19 @@ class PDFLayoutEngine:
                 return 255.0
             px = list(crop.getdata())
         return sum((0.299 * r + 0.587 * g + 0.114 * b) for r, g, b in px) / max(len(px), 1)
+
+    def _region_busyness(self, image_path: Path, region: Tuple[int, int, int, int]) -> float:
+        with Image.open(image_path) as im:
+            arr = im.convert("L")
+            x0, y0, x1, y1 = region
+            crop = np.asarray(arr.crop((max(0, x0), max(0, y0), min(arr.width, x1), min(arr.height, y1))), dtype=np.float32)
+            if crop.size == 0:
+                return 0.0
+            gx = np.zeros_like(crop)
+            gy = np.zeros_like(crop)
+            gx[:, 1:-1] = crop[:, 2:] - crop[:, :-2]
+            gy[1:-1, :] = crop[2:, :] - crop[:-2, :]
+            return float(np.mean(np.sqrt(gx * gx + gy * gy)))
 
     def _choose_text_colors(self, image_path: Path, region: Tuple[int, int, int, int], threshold: float = 140.0) -> Tuple[Any, Any]:
         lum = self._sample_region_luminance(image_path, region)
@@ -186,11 +201,25 @@ class PDFLayoutEngine:
         c.drawImage(ImageReader(str(fitted_cover)), front_x, 0, front_w, front_h, preserveAspectRatio=False, anchor="c")
         fitted_cover.unlink(missing_ok=True)
         c.setFont(self.font_name, 30)
-        title_y = panel_y + panel_h / 2
-        if cover_preset["title_placement"] == "front_top":
-            title_y = panel_y + panel_h - 50
-        elif cover_preset["title_placement"] == "front_bottom":
-            title_y = panel_y + 42
+        candidate_y = {
+            "top": panel_y + panel_h - 50,
+            "middle": panel_y + panel_h / 2,
+            "bottom": panel_y + 42,
+        }
+        placement = cover_preset["title_placement"]
+        if placement == "auto":
+            candidates = {
+                name: (int(front_x), int(max(0, y - 40)), int(front_x + trim_w * 72), int(min(h_pt, y + 40)))
+                for name, y in candidate_y.items()
+            }
+            least_busy = min(candidates.items(), key=lambda kv: self._region_busyness(approved_cover, kv[1]))[0]
+            title_y = candidate_y[least_busy]
+        elif placement == "front_top":
+            title_y = candidate_y["top"]
+        elif placement == "front_bottom":
+            title_y = candidate_y["bottom"]
+        else:
+            title_y = candidate_y["middle"]
         title_region = (int(front_x), int(max(0, title_y - 40)), int(front_x + trim_w * 72), int(min(h_pt, title_y + 40)))
         title_color, title_outline = self._choose_text_colors(approved_cover, title_region)
         self._draw_stroked_centred_text(c, front_x + trim_w * 36, title_y, title, title_color, title_outline, stroke_offset=1.2)
@@ -211,7 +240,7 @@ class PDFLayoutEngine:
         subtitle = str(cover_config.get("subtitle", "")).strip()
         if subtitle:
             c.setFont(self.font_name, 12)
-            subtitle_y = author_y - 22
+            subtitle_y = max(panel_y + 24, title_y - 24) if cover_preset["title_placement"] == "auto" else author_y - 22
             self._draw_stroked_centred_text(c, front_x + trim_w * 36, subtitle_y, subtitle, author_color, author_outline, stroke_offset=0.8)
 
         blurb = str(cover_config.get("back_blurb", "")).strip()

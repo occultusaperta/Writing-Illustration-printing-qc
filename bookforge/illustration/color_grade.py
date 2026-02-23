@@ -48,7 +48,7 @@ def palette_snap(src: Image.Image, palette_hex_list: Iterable[str], strength: fl
     return Image.fromarray(out, mode="RGB")
 
 
-def add_sharpen_and_grain(image: Image.Image, sharpen_amount: float = 0.15, grain_amount: float = 0.05) -> Image.Image:
+def add_sharpen_and_grain(image: Image.Image, sharpen_amount: float = 0.15, grain_amount: float = 0.05, grain_seed: int | None = None) -> Image.Image:
     sharpen_amount = float(np.clip(sharpen_amount, 0.0, 1.0))
     grain_amount = float(np.clip(grain_amount, 0.0, 1.0))
     rgb = image.convert("RGB")
@@ -61,8 +61,11 @@ def add_sharpen_and_grain(image: Image.Image, sharpen_amount: float = 0.15, grai
     if grain_amount > 0:
         arr = np.asarray(rgb, dtype=np.float32)
         h, w, _ = arr.shape
-        seed_input = arr.tobytes() + f"|{grain_amount:.4f}".encode("utf-8")
-        seed = int(hashlib.sha256(seed_input).hexdigest()[:8], 16)
+        if grain_seed is None:
+            seed_input = arr.tobytes() + f"|{grain_amount:.4f}".encode("utf-8")
+            seed = int(hashlib.sha256(seed_input).hexdigest()[:8], 16)
+        else:
+            seed = int(grain_seed)
         rng = np.random.default_rng(seed)
         noise = rng.normal(loc=0.0, scale=grain_amount * 18.0, size=(h, w, 1)).astype(np.float32)
         out = np.clip(arr + noise, 0, 255).astype(np.uint8)

@@ -24,3 +24,20 @@ bookforge studio --story examples/sample_story.md --out dist/run --size 8.5x8.5 
 - `LOCK.json` freezes character/style/cover choices, prompt prefix, negative prompt, layout, typography, cover layout, print geometry, and Fal config. You can switch `fal_endpoint` in approval to a higher-quality Fal endpoint (if available in your account) before locking.
 - Studio refuses OpenAI images with exact error: `OpenAI image provider disabled; Fal/Flux only.`
 - Studio renders premium interior + cover wrap + guides, runs strict preflight, and builds `bookforge_package.zip`.
+
+## Ultimate Imprint profile defaults
+- `crop_mode`: `smart` (fallback `center`) to preserve subject focus when final trim crop is applied.
+- Director Grade controls (all deterministic with lock seed):
+  - `director_grade_enabled: true`
+  - `tone_curve_preset: storybook_lux` (`neutral`, `cinematic_soft`, `watercolor_warm`)
+  - `tone_curve_strength: 0.35`
+  - `paper_texture_strength: 0.08`
+  - `paper_texture_scale: 1.0`
+  - `global_grade_strength: 0.30`
+- Print QC thresholds in approval/lock QA profile:
+  - `min_brightness_p05: 15`
+  - `max_brightness_p95: 245`
+  - `max_out_of_gamut_risk: 0.35`
+  - `max_book_palette_drift: 0.45`
+- Cover title placement supports `title_placement: auto` to pick top/middle/bottom by lowest edge busyness in front safe area.
+- Studio now always emits `review/report.html` and `review/thumbs/*` for static local proofing.

@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from bookforge.qc.composition_qc import focus_bleed_overlap
+from bookforge.qc.print_qc import analyze_print_qc, print_qc_warnings
 from bookforge.qc.visual_integrity import (
     border_artifact_score,
     face_like_regions,
@@ -95,15 +96,19 @@ def _variant_report(path: Path, qa_config: Dict[str, Any], style_ref: Path | Non
         "focus_bleed_overlap": focus["overlap"],
         "focus_box": focus["focus_box"],
     }
+    print_metrics = analyze_print_qc(path, style_ref)
+    report.update(print_metrics)
     face_limit = int(qa_config.get("max_face_like_regions", 3))
     face_fail = faces > face_limit
     report["warnings"] = []
+    report["warnings"].extend(print_qc_warnings(report, qa_config))
     if face_fail:
         report["warnings"].append(f"face_like_regions>{face_limit}")
     max_focus_overlap = float(qa_config.get("max_focus_bleed_overlap", 0.15))
     focus_fail = report["focus_bleed_overlap"] > max_focus_overlap
     if focus_fail:
         report["warnings"].append(f"focus_bleed_overlap>{max_focus_overlap}")
+    extreme_dark_fail = report["brightness_p95"] < 80
     report["passes"] = (
         report["sharpness"] >= qa_config["min_sharpness"]
         and report["entropy"] >= qa_config["min_entropy"]
@@ -117,6 +122,7 @@ def _variant_report(path: Path, qa_config: Dict[str, Any], style_ref: Path | Non
         and report["style_hist_similarity"] >= qa_config["min_style_hist_similarity"]
         and report["page_to_page_hist_drift"] <= qa_config["max_page_to_page_hist_drift"]
         and not focus_fail
+        and not extreme_dark_fail
     )
     return report
 
@@ -128,8 +134,8 @@ def choose_best_variant(paths: List[Path], qa_config: Dict[str, Any], style_ref:
         key=lambda r: (
             r["passes"],
             -4.0 * r["text_likelihood"] - 4.0 * r["watermark_likelihood"] - 3.0 * r["logo_likelihood"] - 3.0 * r["border_artifact_score"],
-            r["style_hist_similarity"] - r["page_to_page_hist_drift"],
-            r["sharpness"] + r["contrast"] + r["entropy"],
+            r["style_hist_similarity"] - r["page_to_page_hist_drift"] - 0.6 * r.get("color_drift_vs_style", 0.0),
+            r["sharpness"] + r["contrast"] + r["entropy"] - 0.2 * max(0.0, 100 - r.get("brightness_p95", 100)) - 5.0 * r.get("out_of_gamut_risk", 0.0),
         ),
         reverse=True,
     )
