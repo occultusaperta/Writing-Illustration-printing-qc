@@ -14,6 +14,8 @@ from PIL import Image, ImageDraw
 from bookforge.illustration.color_grade import add_sharpen_and_grain, grade_image
 from bookforge.illustration.director_grade import apply_director_grade
 from bookforge.illustration.providers import OPENAI_DISABLED_MESSAGE, resolve_image_provider
+from bookforge.illustration.prompt_contract import build_prompt_contract
+from bookforge.illustration.visual_lock import ensure_reference_paths_exist, normalize_visual_lock, validate_visual_lock
 from bookforge.illustration.smart_crop import smart_crop_to_target
 from bookforge.layout.pdf import PDFLayoutEngine, parse_trim_size
 from bookforge.layout.presets import COVER_LAYOUT_PRESETS, INTERIOR_LAYOUT_PRESETS, TYPOGRAPHY_PRESETS, get_preset, presets_payload
@@ -29,6 +31,7 @@ from bookforge.editorial.trade_dress import generate_trade_dress
 from bookforge.profiles import apply_profile, load_profile
 from bookforge.qc.image_qc import choose_best_variant, write_qa_report
 from bookforge.qc.kdp_preflight import KDPPreflight
+from bookforge.qc.premium_visual_qc import run_premium_visual_qc
 from bookforge.review.contact_sheet import generate_contact_sheet
 from bookforge.review.html_report import generate_report as generate_html_report
 from bookforge.review.proof_pack import generate_proof_pack, write_production_report
@@ -484,6 +487,14 @@ class BookforgePipeline:
                 "paper_texture_strength": float(approval.get("paper_texture_strength", 0.08)),
                 "paper_texture_scale": float(approval.get("paper_texture_scale", 1.0)),
                 "global_grade_strength": float(approval.get("global_grade_strength", 0.30)),
+                "premium_finish_hooks": {
+                    "texture_enhancement": approval.get("texture_enhancement", "enabled"),
+                    "microcontrast_enhancement": approval.get("microcontrast_enhancement", "enabled"),
+                    "anti_smoothing_pass": approval.get("anti_smoothing_pass", "enabled"),
+                    "optional_tiled_upscale_path": approval.get("optional_tiled_upscale_path", "unavailable_noop"),
+                    "structure_preserving_upscale_guidance": approval.get("structure_preserving_upscale_guidance", "unavailable_noop"),
+                    "target_resolution": approval.get("target_resolution", "300dpi_trim_plus_bleed"),
+                },
             },
             "pdf": {"image_embed": approval.get("pdf_image_embed", "jpeg"), "jpeg_quality": int(approval.get("pdf_jpeg_quality", 92)), "max_interior_mb": float(approval.get("preflight_max_interior_mb", 300))},
             "spreads": {
@@ -526,6 +537,8 @@ class BookforgePipeline:
             print("WARN: editorial folder missing; continuing for backward compatibility")
         base_seed = _seed_from_lock(parsed_story.get("title", "book"), parsed_story.get("author", "author"), lock["approved_variant"])
         lock["seeds"] = {"base_seed": base_seed, "per_page_seed": {str(i): base_seed + i * 101 for i in range(1, effective_page_count + 1)}}
+        lock, _lock_prov = normalize_visual_lock(lock, parsed_story=parsed_story, approval=approval)
+        lock["review_provenance"] = {"visual_contract_applied": _lock_prov.get("applied_fields", [])}
         if lock["spreads"].get("pairs") and lock["spreads"].get("mode") == "none":
             lock["spreads"]["mode"] = "custom_pairs"
         if not lock["spreads"]["pairs"] and approval.get("spread_pages"):
@@ -535,6 +548,9 @@ class BookforgePipeline:
                 lock["spreads"]["pairs"] = [[int(pages[0]), int(pages[1])]]
 
         _parse_spread_pairs(lock["spreads"], effective_page_count)
+        vres = validate_visual_lock(lock, require_lock=True)
+        if not vres.ok:
+            raise RuntimeError(f"LOCK.json missing required fields: {', '.join(vres.missing)}")
         (out / "LOCK.json").write_text(json.dumps(lock, indent=2), encoding="utf-8")
         return {"status": "PASS", "lock": str(out / "LOCK.json"), "page_count": effective_page_count}
 
@@ -547,17 +563,11 @@ class BookforgePipeline:
 
 
     def _validate_lock(self, lock: Dict[str, Any], require_lock: bool = False) -> None:
-        required = ["approved_variant", "approved_character", "approved_style", "locked_prompt_prefix", "locked_negative_prompt", "storyboard", "print", "fal", "qa", "seeds"]
-        missing = [k for k in required if k not in lock]
-        if missing and require_lock:
-            raise RuntimeError(f"LOCK.json missing required fields: {', '.join(missing)}")
-        if "visual_lock" not in lock:
-            lock["visual_lock"] = {
-                "variant_id": lock.get("approved_variant"),
-                "character_reference": lock.get("approved_character"),
-                "style_reference": lock.get("approved_style"),
-                "cover_reference": lock.get("approved_cover"),
-            }
+        vres = validate_visual_lock(lock, require_lock=require_lock)
+        if not vres.ok:
+            raise RuntimeError(f"LOCK.json missing required fields: {', '.join(vres.missing)}")
+        lock, _ = normalize_visual_lock(lock)
+        ensure_reference_paths_exist(lock)
 
     def _postprocess_variant(self, src: Path, dst: Path, style_ref: Path, lock: Dict[str, Any], page_no: int) -> None:
         post = lock.get("post", {})
@@ -580,6 +590,9 @@ class BookforgePipeline:
         )
         grain_seed = int(lock.get("seeds", {}).get("base_seed", 0)) + int(page_no) * 997
         final = add_sharpen_and_grain(graded, sharpen_amount=sharpen, grain_amount=grain, grain_seed=grain_seed)
+        # premium finish hooks are additive; unavailable external stacks remain explicit no-op
+        _hooks = post.get("premium_finish_hooks", {})
+        _ = _hooks.get("optional_tiled_upscale_path", "unavailable_noop")
         dst.parent.mkdir(parents=True, exist_ok=True)
         final.save(dst, "PNG")
 
@@ -654,7 +667,9 @@ class BookforgePipeline:
             artifact = artifact_map.get(p["page_number"], {})
             addendum = _build_prompt_addendum(p, turn, artifact, bool(lock.get("editorial", {}).get("editorial_mode", True)))
             prompt = compile_prompt(lock, p["text"], sb, addendum=addendum)
-            prompts.append({"page_number": p["page_number"], "prompt": prompt})
+            prompts.append({"page_number": p["page_number"], "prompt": prompt, "illustration_notes": p.get("illustration_notes", ""), "required_hidden_details": p.get("required_hidden_details", [])})
+
+        prompt_contract = build_prompt_contract(parsed, lock, spread_pairs=lock.get("spreads", {}).get("pairs", []))
 
         checkpoint_pages = int(lock.get("checkpoint", {}).get("pages", 0))
         check_file = out / "CHECKPOINT.json"
@@ -680,7 +695,7 @@ class BookforgePipeline:
 
         checkpoint_payload = json.loads(check_file.read_text(encoding="utf-8")) if check_file.exists() else {}
         prompts, checkpoint_summary = _apply_checkpoint_overrides(prompts, checkpoint_payload)
-        (out / "prompts.json").write_text(json.dumps({"prompts": prompts, "checkpoint": checkpoint_summary}, indent=2), encoding="utf-8")
+        (out / "prompts.json").write_text(json.dumps({"prompts": prompts, "prompt_contract": prompt_contract, "checkpoint": checkpoint_summary}, indent=2), encoding="utf-8")
 
         page_seeds = {int(k): int(v) for k, v in lock.get("seeds", {}).get("per_page_seed", {}).items()}
         generated = ill.generate_page_variants(
@@ -812,7 +827,21 @@ class BookforgePipeline:
         production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}}
         write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
-        qa_payload = {"attempts": qa_attempts, "profile": lock["qa"], "checkpoint_overrides_applied": checkpoint_summary, "cache_hits": cache_hits, "cache_keys": cache_keys, "post": lock.get("post", {})}
+        premium_qc = run_premium_visual_qc(
+            [Path(p) for p in selected],
+            lock=lock,
+            parsed_story=parsed,
+            provider_provenance={"provider": provider_name, "endpoint": generated.get("endpoint", endpoint), "generated_provenance": generated.get("provenance", {})},
+        )
+        qa_payload = {
+            "attempts": qa_attempts,
+            "profile": lock["qa"],
+            "checkpoint_overrides_applied": checkpoint_summary,
+            "cache_hits": cache_hits,
+            "cache_keys": cache_keys,
+            "post": lock.get("post", {}),
+            "premium_visual_qc": premium_qc,
+        }
         write_qa_report(review / "qa_report.json", qa_payload)
         preprod_editorial = out / "preprod" / "editorial"
         _copy_companion_to_review(out)
