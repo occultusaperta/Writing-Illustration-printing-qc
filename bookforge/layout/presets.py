@@ -54,6 +54,7 @@ TYPOGRAPHY_PRESETS: List[TypographyPreset] = [
     TypographyPreset("storybook_balanced", "Storybook Balanced", 18, 12, 1.3, 10, "normal"),
     TypographyPreset("storybook_compact", "Storybook Compact", 16, 11, 1.28, 12, "tight"),
     TypographyPreset("imprint_caption_lux", "Imprint Caption Lux", 22, 14, 1.15, 5, "normal"),
+    TypographyPreset("participatory_xheight_sans", "Participatory X-Height Sans", 24, 15, 1.18, 5, "normal"),
 ]
 
 COVER_LAYOUT_PRESETS: List[CoverLayoutPreset] = [
