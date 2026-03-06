@@ -82,6 +82,9 @@ def test_checkpoint_flow_template_written(tmp_path: Path):
         "locked_negative_prompt": "n",
         "storyboard": {"pages": []},
         "print": {"required_pixels": [128, 128]},
+        "approved_variant": 1,
+        "qa": {"max_regen_rounds": 0, "max_focus_bleed_overlap": 1.0},
+        "seeds": {"per_page_seed": {"1": 1, "2": 2}},
     }
     Image.new("RGB", (64, 64), (1, 1, 1)).save(tmp_path / "char.png")
     Image.new("RGB", (64, 64), (2, 2, 2)).save(tmp_path / "style.png")
