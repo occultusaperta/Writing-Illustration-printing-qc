@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw
 
 from bookforge.illustration.color_grade import add_sharpen_and_grain, grade_image
 from bookforge.illustration.director_grade import apply_director_grade
-from bookforge.illustration.fal_flux import FalFluxIllustrator
+from bookforge.illustration.providers import OPENAI_DISABLED_MESSAGE, resolve_image_provider
 from bookforge.illustration.smart_crop import smart_crop_to_target
 from bookforge.layout.pdf import PDFLayoutEngine, parse_trim_size
 from bookforge.layout.presets import COVER_LAYOUT_PRESETS, INTERIOR_LAYOUT_PRESETS, TYPOGRAPHY_PRESETS, get_preset, presets_payload
@@ -251,7 +251,8 @@ class BookforgePipeline:
         req_w = int((trim_w + 2 * self.bleed_in) * 300)
         req_h = int((trim_h + 2 * self.bleed_in) * 300)
 
-        ill = FalFluxIllustrator()
+        ill, provider_name = resolve_image_provider("auto")
+        style_variants_dir = preprod / "style_variants"
         for variant in bible_variants:
             i = variant["variant"]
             p = variant["style_bible"]["palette"]
@@ -266,6 +267,20 @@ class BookforgePipeline:
             ill.generate_option_image(style_prompt, preprod / "style_options" / f"style_frame_v{i}.png", (req_w, req_h), self.default_steps)
             self._make_palette_tile(p, preprod / "style_options" / f"palette_tile_v{i}.png")
             ill.generate_option_image(cover_prompt, preprod / "cover_options" / f"cover_concept_v{i}.png", (req_w, req_h), self.default_steps)
+
+            variant_dir = style_variants_dir / f"v{i}"
+            variant_dir.mkdir(parents=True, exist_ok=True)
+            references = {
+                "variant_id": i,
+                "provider": provider_name,
+                "character_reference": str((preprod / "character_options" / f"character_turnaround_v{i}.png").relative_to(preprod)),
+                "style_reference": str((preprod / "style_options" / f"style_frame_v{i}.png").relative_to(preprod)),
+                "cover_sample": str((preprod / "cover_options" / f"cover_concept_v{i}.png").relative_to(preprod)),
+                "prompt_prefix": variant["locked_prompt_prefix"],
+                "negative_prompt": variant["locked_negative_prompt"],
+                "settings": {"steps": self.default_steps, "required_pixels": [req_w, req_h]},
+            }
+            (variant_dir / "variant_review.json").write_text(json.dumps(references, indent=2), encoding="utf-8")
 
         option_images = sorted((preprod).rglob("*_v*.png"))
         generate_contact_sheet(option_images, preprod / "options_contact_sheet.pdf")
@@ -327,6 +342,7 @@ class BookforgePipeline:
             "image_steps": 6,
             "page_variants": 2,
             "fal_endpoint": "https://fal.run/fal-ai/flux/schnell",
+            "image_provider": "auto",
             "spread_mode": "custom_pairs" if _storyweaver_spreads(parsed) else "none",
             "spread_pairs": _storyweaver_spreads(parsed),
             "checkpoint_pages": 2,
@@ -431,8 +447,16 @@ class BookforgePipeline:
             back_tagline = tagline
             source_tagline = "story"
 
+        provider_name = str(approval.get("image_provider", "auto")).lower()
         lock = {
             "approved_variant": variant,
+            "image_provider": provider_name,
+            "visual_lock": {
+                "variant_id": variant,
+                "character_reference": str(approved_character),
+                "style_reference": str(approved_style),
+                "cover_reference": str(approved_cover),
+            },
             "approved_character": str(approved_character),
             "approved_style": str(approved_style),
             "approved_cover": str(approved_cover),
@@ -522,6 +546,19 @@ class BookforgePipeline:
             im.crop((half, 0, w, h)).save(right_out, "PNG")
 
 
+    def _validate_lock(self, lock: Dict[str, Any], require_lock: bool = False) -> None:
+        required = ["approved_variant", "approved_character", "approved_style", "locked_prompt_prefix", "locked_negative_prompt", "storyboard", "print", "fal", "qa", "seeds"]
+        missing = [k for k in required if k not in lock]
+        if missing and require_lock:
+            raise RuntimeError(f"LOCK.json missing required fields: {', '.join(missing)}")
+        if "visual_lock" not in lock:
+            lock["visual_lock"] = {
+                "variant_id": lock.get("approved_variant"),
+                "character_reference": lock.get("approved_character"),
+                "style_reference": lock.get("approved_style"),
+                "cover_reference": lock.get("approved_cover"),
+            }
+
     def _postprocess_variant(self, src: Path, dst: Path, style_ref: Path, lock: Dict[str, Any], page_no: int) -> None:
         post = lock.get("post", {})
         mode = str(post.get("color_grade_mode", "match_style"))
@@ -589,14 +626,19 @@ class BookforgePipeline:
 
     def studio(self, story_path: str, out_dir: str, size: str, pages: int, illustrator: str, require_lock: bool) -> Dict[str, Any]:
         if illustrator == "openai":
-            raise RuntimeError("OpenAI image provider disabled; Fal/Flux only.")
-        if illustrator not in {"fal", "auto"}:
+            raise RuntimeError(OPENAI_DISABLED_MESSAGE)
+        if illustrator not in {"fal", "auto", "flux_local"}:
             raise RuntimeError("Only Fal/Flux is supported for studio generation.")
         out = Path(out_dir)
         lock_path = out / "LOCK.json"
         if require_lock and not lock_path.exists():
             raise RuntimeError("LOCK.json missing. Run preprod + lock before studio.")
         lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        self._validate_lock(lock, require_lock=require_lock)
+
+        requested_provider = illustrator if illustrator != "auto" else str(lock.get("image_provider", "auto"))
+        endpoint = lock.get("fal", {}).get("endpoint", "https://fal.run/fal-ai/flux/schnell")
+        ill, provider_name = resolve_image_provider(requested_provider, fal_endpoint=endpoint)
 
         parsed = parse_story(story_path, pages)
         page_count = _storyweaver_declared_pages(parsed) or len(parsed["pages"])
@@ -618,7 +660,7 @@ class BookforgePipeline:
         check_file = out / "CHECKPOINT.json"
         if checkpoint_pages > 0 and not (check_file.exists() and json.loads(check_file.read_text(encoding="utf-8")).get("approved")):
             checkpoint_prompts = prompts[:checkpoint_pages]
-            checkpoint_generated = FalFluxIllustrator(endpoint=lock["fal"]["endpoint"]).generate_page_variants(
+            checkpoint_generated = ill.generate_page_variants(
                 checkpoint_prompts,
                 out / "images" / "checkpoint_variants",
                 (req_w, req_h),
@@ -640,7 +682,6 @@ class BookforgePipeline:
         prompts, checkpoint_summary = _apply_checkpoint_overrides(prompts, checkpoint_payload)
         (out / "prompts.json").write_text(json.dumps({"prompts": prompts, "checkpoint": checkpoint_summary}, indent=2), encoding="utf-8")
 
-        ill = FalFluxIllustrator(endpoint=lock["fal"]["endpoint"])
         page_seeds = {int(k): int(v) for k, v in lock.get("seeds", {}).get("per_page_seed", {}).items()}
         generated = ill.generate_page_variants(
             prompts,
@@ -758,7 +799,7 @@ class BookforgePipeline:
         cache_keys = generated.get("cache_keys", {})
         if spread_pairs:
             generate_contact_sheet([Path(p) for p in selected], review / "spread_preview.pdf", columns=2)
-        proof_meta = {"trim": size, "dpi": lock["print"]["dpi"], "cover_preset": lock["cover_layout_preset"], "interior_preset": lock["interior_layout_preset"], "endpoint": lock["fal"]["endpoint"], "age_band": lock.get("editorial", {}).get("age_band", ""), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", ""), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True)}
+        proof_meta = {"trim": size, "dpi": lock["print"]["dpi"], "cover_preset": lock["cover_layout_preset"], "interior_preset": lock["interior_layout_preset"], "endpoint": lock["fal"]["endpoint"], "provider": provider_name, "locked_references_used": True, "chosen_variant": lock["approved_variant"], "age_band": lock.get("editorial", {}).get("age_band", ""), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", ""), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True)}
         generate_proof_pack(review / "proof_pack.pdf", cover, [Path(p) for p in selected], proof_meta, qa_attempts)
         drift_rows = [a.get("best", {}).get("color_drift_vs_style", 0.0) for a in qa_attempts if isinstance(a.get("page"), int)]
         drift_pages = sorted(
@@ -768,7 +809,7 @@ class BookforgePipeline:
         )[:5]
         cache_bools = [hit for arr in cache_hits.values() for hit in arr]
         cache_hit_rate = (sum(1 for x in cache_bools if x) / len(cache_bools)) if cache_bools else 0.0
-        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {})}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}}
+        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}}
         write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
         qa_payload = {"attempts": qa_attempts, "profile": lock["qa"], "checkpoint_overrides_applied": checkpoint_summary, "cache_hits": cache_hits, "cache_keys": cache_keys, "post": lock.get("post", {})}

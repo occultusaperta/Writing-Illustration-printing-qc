@@ -35,7 +35,7 @@ def main() -> None:
     studio.add_argument("--out", required=True)
     studio.add_argument("--size", default="8.5x8.5")
     studio.add_argument("--pages", type=int, default=24)
-    studio.add_argument("--illustrator", choices=["auto", "fal", "openai"], default="fal")
+    studio.add_argument("--illustrator", choices=["auto", "fal", "flux_local", "openai"], default="auto")
     studio.add_argument("--require-lock", action="store_true")
 
     verify = sub.add_parser("verify", help="Validate studio artifacts and package contents")
