@@ -8,7 +8,8 @@ import streamlit as st
 
 from bookforge.ui.utils import (
     apply_variant_selection_to_approval,
-    detect_storyweaver_summary,
+    detect_storyweaver_story_file,
+    should_disable_pages_input,
     discover_profiles,
     estimate_fal_calls,
     list_files,
@@ -156,7 +157,16 @@ def _render_setup() -> None:
 
     c1, c2, c3 = st.columns(3)
     st.session_state["size"] = c1.text_input("Trim size", value=st.session_state["size"])
-    st.session_state["pages"] = c2.number_input("Pages", min_value=8, step=2, value=int(st.session_state["pages"]))
+    story_info = detect_storyweaver_story_file(st.session_state.get("story_path", "")) if st.session_state.get("story_path") else {"is_storyweaver": False}
+    if should_disable_pages_input(story_info):
+        declared = int(story_info.get("declared_pages") or st.session_state["pages"])
+        if int(st.session_state["pages"]) != declared:
+            c2.warning(f"Pages input ignored for Storyweaver manuscript. Declared pages: {declared}.")
+        st.session_state["pages"] = declared
+        c2.number_input("Pages (ignored for this manuscript)", min_value=8, step=2, value=int(st.session_state["pages"]), disabled=True)
+        c2.caption(f"Detected spreads: {story_info.get('spreads', [])}")
+    else:
+        st.session_state["pages"] = c2.number_input("Pages", min_value=8, step=2, value=int(st.session_state["pages"]))
     st.session_state["variants"] = c3.number_input("Variants", min_value=1, max_value=8, value=int(st.session_state["variants"]))
 
     if st.button("Run Doctor (strict)"):
@@ -464,6 +474,11 @@ def _render_approval_gate() -> None:
         _open_button(paths["editorial_report"], "Open editorial_report.md")
     if paths.get("readaloud") and paths["readaloud"].exists():
         _open_button(paths["readaloud"], "Open readaloud_script.md")
+    companion_dir = out_dir / "preprod" / "companion"
+    if companion_dir.exists():
+        st.caption("Companion artifacts")
+        for companion_file in sorted(companion_dir.glob("*.md")):
+            _open_button(companion_file, f"Open {companion_file.name}")
     if paths.get("hook_pack") and paths["hook_pack"].exists():
         hp = read_json(paths["hook_pack"])
         st.info(f"Premise: {hp.get('one_sentence_premise','n/a')}\n\nPitch: {hp.get('15_second_pitch','n/a')}")

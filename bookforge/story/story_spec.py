@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Tuple
 
 import requests
 
+from bookforge.story.storyweaver_parser import detect_storyweaver_format, parse_storyweaver_markdown
+
 
 _STORYWEAVER_PAGE_RE = re.compile(r"^Pages\s*(\d+)\s*[\-–]\s*(\d+)(.*)$", re.IGNORECASE)
 
@@ -177,6 +179,45 @@ def _split_with_word_limit(text: str, pages: int, max_words_per_page: int) -> Li
 def parse_story(path: str | Path, pages: int, max_words_per_page_override: int | None = None) -> Dict[str, Any]:
     story_path = Path(path)
     raw = story_path.read_text(encoding="utf-8")
+    if detect_storyweaver_format(raw):
+        bundle = parse_storyweaver_markdown(raw)
+        if pages != bundle.declared_pages:
+            print(f"WARN: --pages={pages} ignored for Storyweaver manuscript; using declared_pages={bundle.declared_pages}.")
+        return {
+            "title": bundle.title or story_path.stem.replace("_", " ").title(),
+            "author": bundle.author or "Internal Studio",
+            "pages": [
+                {
+                    "page_number": p.page_number,
+                    "text": p.printed_markdown,
+                    "illustration_notes": p.illustration_notes,
+                    "page_turn_marker": p.page_turn_marker,
+                    "typography_directives": p.typography_directives,
+                    "required_hidden_details": p.required_hidden_details,
+                }
+                for p in bundle.pages
+            ],
+            "metadata": {
+                "protagonist_name": "",
+                "wardrobe": "",
+                "palette": "",
+                "vibe": "",
+                "typography_preset": "storybook_large",
+                "interior_layout_preset": "cinematic_panel_bottom",
+                "cover_layout_preset": "front_title_top_back_blurb",
+                "age_band": "6-8",
+                "max_words_per_page": None,
+                "declared_pages": bundle.declared_pages,
+                "detected_spreads": bundle.spreads,
+                "extras": bundle.extras,
+                "back_cover_candidates": {
+                    "tagline_quote": bundle.tagline_quote,
+                    "one_sentence_pitch": bundle.one_sentence_pitch,
+                },
+                "format": "storyweaver",
+            },
+        }
+
     meta, text = _extract_front_matter(raw)
 
     title = meta.get("title") or story_path.stem.replace("_", " ").title()
