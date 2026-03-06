@@ -11,6 +11,24 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
+
+
+def detect_storyweaver_story_file(story_path: str | Path) -> Dict[str, Any]:
+    from bookforge.story.storyweaver_parser import detect_storyweaver_format, parse_storyweaver_markdown
+
+    path = Path(story_path)
+    if not path.exists():
+        return {"is_storyweaver": False, "declared_pages": None, "spreads": []}
+    raw = path.read_text(encoding="utf-8")
+    if not detect_storyweaver_format(raw):
+        return {"is_storyweaver": False, "declared_pages": None, "spreads": []}
+    bundle = parse_storyweaver_markdown(raw)
+    return {"is_storyweaver": True, "declared_pages": bundle.declared_pages, "spreads": bundle.spreads}
+
+
+def should_disable_pages_input(story_info: Dict[str, Any]) -> bool:
+    return bool(story_info.get("is_storyweaver"))
+
 def discover_profiles(profiles_dir: str = "profiles") -> List[str]:
     root = Path(profiles_dir)
     if not root.exists():
