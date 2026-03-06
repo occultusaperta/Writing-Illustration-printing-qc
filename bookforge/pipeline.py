@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -161,8 +163,16 @@ class BookforgePipeline:
         storyboard = generate_storyboard(parsed, variants)
         (preprod / "story_parsed.json").write_text(json.dumps(parsed, indent=2), encoding="utf-8")
         (preprod / "storyboard.json").write_text(json.dumps(storyboard, indent=2), encoding="utf-8")
+        companion_dir = preprod / "companion"
+        companion = parsed.get("companion", {}) if isinstance(parsed.get("companion", {}), dict) else {}
+        if companion:
+            companion_dir.mkdir(parents=True, exist_ok=True)
+            for section, body in companion.items():
+                slug = re.sub(r"[^a-z0-9]+", "_", str(section).strip().lower()).strip("_") or "section"
+                (companion_dir / f"{slug}.md").write_text(str(body), encoding="utf-8")
+            (companion_dir / "manifest.json").write_text(json.dumps({"sections": sorted(companion.keys())}, indent=2), encoding="utf-8")
         bible_variants = build_bible_variants(parsed, variants=variants)
-        blurb_options = generate_blurb_options(parsed, n=5)
+        blurb_options = generate_blurb_options(parsed, n=5, allow_generated=False)
         (preprod / "blurb_options.json").write_text(json.dumps(blurb_options, indent=2), encoding="utf-8")
 
         for variant in bible_variants:
@@ -254,8 +264,8 @@ class BookforgePipeline:
             "image_steps": 6,
             "page_variants": 2,
             "fal_endpoint": "https://fal.run/fal-ai/flux/schnell",
-            "spread_mode": "none",
-            "spread_pairs": [],
+            "spread_mode": "custom_pairs" if parsed.get("metadata", {}).get("storyweaver_spread_pairs") else "none",
+            "spread_pairs": parsed.get("metadata", {}).get("storyweaver_spread_pairs", []),
             "checkpoint_pages": 2,
             "qa_profile": "platinum",
             "max_regen_rounds": 2,
@@ -298,12 +308,14 @@ class BookforgePipeline:
             "artifact_intensity": "light",
             "readaloud_script_enabled": True,
             "trade_dress_lock_enabled": True,
+            "allow_generated_cover_copy": False,
             "notes": "",
         }
         if profile_dict:
             approval = apply_profile(approval, profile_dict)
         (preprod / "APPROVAL.json").write_text(json.dumps(approval, indent=2), encoding="utf-8")
-        return {"status": "PASS", "stage": "preprod", "out_dir": str(out)}
+        warnings = parsed.get("parse_warnings", [])
+        return {"status": "PASS", "stage": "preprod", "out_dir": str(out), "warnings": warnings, "declared_pages": parsed.get("metadata", {}).get("declared_pages", pages), "storyweaver_detected": bool(parsed.get("metadata", {}).get("storyweaver_detected", False))}
 
     def lock(self, out_dir: str, size: str = "8.5x8.5", page_count: int = 24) -> Dict[str, Any]:
         out = Path(out_dir)
@@ -329,12 +341,13 @@ class BookforgePipeline:
             if not path.exists():
                 raise RuntimeError(f"Missing approval selection: {path}")
 
+        effective_page_count = int(parsed_story.get("metadata", {}).get("declared_pages", page_count) or page_count)
         trim_w, trim_h = parse_trim_size(size)
         required_pixels = [int((trim_w + 2 * self.bleed_in) * 300), int((trim_h + 2 * self.bleed_in) * 300)]
         blurb_options = json.loads((preprod / "blurb_options.json").read_text(encoding="utf-8")) if (preprod / "blurb_options.json").exists() else {"blurbs": [], "subtitles": []}
         blurbs = blurb_options.get("blurbs", [])
         subtitles = blurb_options.get("subtitles", [])
-        spine_w = max(float(approval["spine_min_in"]), page_count * float(approval["paper_thickness_in"]))
+        spine_w = max(float(approval["spine_min_in"]), effective_page_count * float(approval["paper_thickness_in"]))
         cover_preset = get_preset(approval["cover_layout_preset"], "cover")
 
         lock = {
@@ -350,7 +363,7 @@ class BookforgePipeline:
             "typography_preset": approval["typography_preset"],
             "cover_layout_preset": approval["cover_layout_preset"],
             "storyboard": json.loads(storyboard_path.read_text(encoding="utf-8")),
-            "print": {"trim_size": size, "bleed_in": self.bleed_in, "safe_in": self.safe_in, "dpi": 300, "page_count": page_count, "required_pixels": required_pixels},
+            "print": {"trim_size": size, "bleed_in": self.bleed_in, "safe_in": self.safe_in, "dpi": 300, "page_count": effective_page_count, "required_pixels": required_pixels},
             "cover": {"paper_thickness_in": float(approval["paper_thickness_in"]), "spine_min_in": float(approval["spine_min_in"]), "spine_w_in": spine_w, "barcode_box_in": cover_preset["barcode_box_in"], "spine_text_min_in": 0.10},
             "fal": {"endpoint": approval.get("fal_endpoint", "https://fal.run/fal-ai/flux/schnell"), "steps": int(approval["image_steps"]), "page_variants": int(approval["page_variants"])},
             "qa": {k: approval[k] for k in ["qa_profile", "max_regen_rounds", "min_sharpness", "min_entropy", "min_contrast", "max_border_bar_score", "min_style_hist_similarity", "max_page_to_page_hist_drift", "max_text_likelihood", "max_watermark_likelihood", "max_logo_likelihood", "max_border_artifact_score", "max_face_like_regions", "max_focus_bleed_overlap", "min_brightness_p05", "max_brightness_p95", "max_out_of_gamut_risk", "max_book_palette_drift"]},
@@ -370,7 +383,7 @@ class BookforgePipeline:
             "pdf": {"image_embed": approval.get("pdf_image_embed", "jpeg"), "jpeg_quality": int(approval.get("pdf_jpeg_quality", 92)), "max_interior_mb": float(approval.get("preflight_max_interior_mb", 300))},
             "spreads": {
                 "mode": approval.get("spread_mode", "none"),
-                "pairs": approval.get("spread_pairs", []),
+                "pairs": approval.get("spread_pairs", []) or parsed_story.get("spread_pairs", []),
             },
             "checkpoint": {"pages": int(approval.get("checkpoint_pages", 2))},
             "back_matter": {
@@ -401,16 +414,18 @@ class BookforgePipeline:
         else:
             print("WARN: editorial folder missing; continuing for backward compatibility")
         base_seed = _seed_from_lock(parsed_story.get("title", "book"), parsed_story.get("author", "author"), lock["approved_variant"])
-        lock["seeds"] = {"base_seed": base_seed, "per_page_seed": {str(i): base_seed + i * 101 for i in range(1, page_count + 1)}}
+        lock["seeds"] = {"base_seed": base_seed, "per_page_seed": {str(i): base_seed + i * 101 for i in range(1, effective_page_count + 1)}}
+        if lock["spreads"].get("pairs") and lock["spreads"].get("mode") == "none":
+            lock["spreads"]["mode"] = "custom_pairs"
         if not lock["spreads"]["pairs"] and approval.get("spread_pages"):
             pages = approval.get("spread_pages", [])
             if isinstance(pages, list) and len(pages) >= 2:
                 lock["spreads"]["mode"] = "custom_pairs"
                 lock["spreads"]["pairs"] = [[int(pages[0]), int(pages[1])]]
 
-        _parse_spread_pairs(lock["spreads"], page_count)
+        _parse_spread_pairs(lock["spreads"], effective_page_count)
         (out / "LOCK.json").write_text(json.dumps(lock, indent=2), encoding="utf-8")
-        return {"status": "PASS", "lock": str(out / "LOCK.json")}
+        return {"status": "PASS", "lock": str(out / "LOCK.json"), "page_count": effective_page_count}
 
     def _split_spread(self, spread: Path, left_out: Path, right_out: Path) -> None:
         with Image.open(spread) as im:
@@ -496,7 +511,8 @@ class BookforgePipeline:
             raise RuntimeError("LOCK.json missing. Run preprod + lock before studio.")
         lock = json.loads(lock_path.read_text(encoding="utf-8"))
 
-        parsed = parse_story(story_path, pages)
+        lock_pages = int(lock.get("print", {}).get("page_count", pages))
+        parsed = parse_story(story_path, lock_pages)
         storyboard_pages = {p["page_number"]: p for p in lock["storyboard"].get("pages", [])}
         req_w, req_h = lock["print"]["required_pixels"]
 
@@ -516,6 +532,12 @@ class BookforgePipeline:
                 eye = verify_focus_not_covered_by_panel((0.5, 0.9), (0.0, 0.8, 1.0, 1.0))
                 if eye.get("status") == "warn":
                     addendum_parts.append("keep key action above caption strip; keep faces away from bottom edge")
+            notes = p.get("illustration_notes", []) if isinstance(p, dict) else []
+            hidden = p.get("required_hidden_details", []) if isinstance(p, dict) else []
+            if notes:
+                addendum_parts.append("Illustration constraints (STRICT): " + " | ".join(str(x) for x in notes))
+            if hidden:
+                addendum_parts.append("Required hidden details (STRICT): " + " | ".join(str(x) for x in hidden))
             prompt = compile_prompt(lock, p["text"], sb, addendum=" ".join(addendum_parts))
             prompts.append({"page_number": p["page_number"], "prompt": prompt})
 
@@ -688,6 +710,12 @@ class BookforgePipeline:
                     dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
             resolved = lock.get("editorial", {}).get("resolved_artifacts_map", [])
             (review / "hidden_artifacts_map.json").write_text(json.dumps(resolved, indent=2), encoding="utf-8")
+        preprod_companion = out / "preprod" / "companion"
+        if preprod_companion.exists():
+            review_companion = review / "companion"
+            if review_companion.exists():
+                shutil.rmtree(review_companion)
+            shutil.copytree(preprod_companion, review_companion)
         generate_html_report(out, [Path(p) for p in selected], qa_payload, production_payload, Path(lock["approved_cover"]))
 
         zip_path = out / "bookforge_package.zip"
@@ -745,6 +773,14 @@ class BookforgePipeline:
         review_dir = out / "review"
         if not (review_dir / "editorial_report.md").exists():
             warnings.append("Missing review/editorial_report.md")
+        companion_dir = review_dir / "companion"
+        story_parsed_path = out / "preprod" / "story_parsed.json"
+        expects_companion = False
+        if story_parsed_path.exists():
+            parsed_story = json.loads(story_parsed_path.read_text(encoding="utf-8"))
+            expects_companion = bool(parsed_story.get("metadata", {}).get("storyweaver_detected", False))
+        if expects_companion and not companion_dir.exists():
+            warnings.append("Missing review/companion (allowed for older runs)")
         prod = json.loads(production_path.read_text(encoding="utf-8")) if production_path.exists() else {}
         if prod.get("editorial", {}).get("readaloud_script_enabled", True) and not (review_dir / "readaloud_script.md").exists():
             warnings.append("Missing review/readaloud_script.md")
@@ -757,6 +793,8 @@ class BookforgePipeline:
             missing_zip = sorted(expected - names)
             if missing_zip:
                 failures.append(f"bookforge_package.zip missing artifacts: {', '.join(missing_zip)}")
+            if companion_dir.exists() and not any(n.startswith("review/companion/") for n in names):
+                failures.append("bookforge_package.zip missing review/companion artifacts")
         else:
             warnings.append("bookforge_package.zip not found; run studio packaging step")
 
@@ -781,3 +819,8 @@ class BookforgePipeline:
                 for p in thumbs.rglob("*"):
                     if p.is_file():
                         zf.write(p, arcname=str(p.relative_to(out)))
+            for folder in [out / "preprod" / "companion", out / "review" / "companion"]:
+                if folder.exists():
+                    for p in folder.rglob("*"):
+                        if p.is_file():
+                            zf.write(p, arcname=str(p.relative_to(out)))

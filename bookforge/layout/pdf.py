@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import tempfile
 
 import numpy as np
@@ -20,6 +21,26 @@ try:
 except Exception:  # optional runtime dependency in some environments
     pyphen = None
 
+
+
+
+def extract_typography_directives(markdown_text: str) -> List[Dict[str, Any]]:
+    directives: List[Dict[str, Any]] = []
+    for line in markdown_text.splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        if raw.startswith("#"):
+            content = raw.lstrip("#").strip()
+            if content:
+                directives.append({"kind": "headline", "text": content})
+        spaced = re.search(r"\b(?:[A-Za-z]\s+){3,}[A-Za-z]\b", raw.replace("&nbsp;", " "))
+        if spaced:
+            directives.append({"kind": "spaced", "text": spaced.group(0)})
+        tiny = re.findall(r"\*([a-z]{3,10})\*", raw)
+        for token in tiny:
+            directives.append({"kind": "tiny", "text": token})
+    return directives
 
 def parse_trim_size(size: str) -> Tuple[float, float]:
     w, h = size.lower().split("x")
@@ -162,6 +183,24 @@ class PDFLayoutEngine:
                 raise RuntimeError(f"Text overflow could not be resolved on page {page['page_number']}. Reduce text or choose a larger panel preset.")
 
             para.drawOn(c, safe_x + layout_preset["panel_padding_pt"], panel_y + panel_h - layout_preset["panel_padding_pt"] - needed_h)
+            directives = extract_typography_directives(page.get("printed_markdown", page.get("text", "")))
+            for idx, directive in enumerate(directives):
+                kind = directive.get("kind")
+                txt = str(directive.get("text", "")).replace("&nbsp;", " ")
+                if not txt:
+                    continue
+                if kind == "headline":
+                    c.setFillColor(black)
+                    c.setFont(self.font_name, min(72, typography_preset["base_font_size"] * 3))
+                    c.drawCentredString(page_w / 2, safe_y + safe_h * 0.72, txt)
+                elif kind == "spaced":
+                    c.setFillColor(black)
+                    c.setFont(self.font_name, min(44, typography_preset["base_font_size"] * 2))
+                    c.drawCentredString(page_w / 2, safe_y + safe_h * 0.58, txt)
+                elif kind == "tiny":
+                    c.setFillColor(black)
+                    c.setFont(self.font_name, max(7, typography_preset["min_font_size"] - 1))
+                    c.drawString(safe_x + 12 + (idx * 20), safe_y + safe_h * 0.45 - (idx * 8), txt)
             if layout_preset["show_page_numbers"]:
                 c.setFillColor(black)
                 c.setFont(self.font_name, 9)
