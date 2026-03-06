@@ -276,6 +276,15 @@ def _render_preprod() -> None:
             st.session_state["last_result"] = result
             _show_command_output(result)
 
+    story_parsed = out_dir / "preprod" / "story_parsed.json"
+    if story_parsed.exists():
+        summary = detect_storyweaver_summary(read_json(story_parsed))
+        if summary.get("detected"):
+            st.info(
+                f"Storyweaver detected. Declared pages: {summary.get('declared_pages')}. "
+                f"Detected spreads: {summary.get('spreads')}. Pages input is ignored for this manuscript."
+            )
+
     _render_run_history()
     if (out_dir / "preprod").exists():
         _render_checklist("post-preprod")

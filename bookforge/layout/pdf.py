@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import tempfile
 
 import numpy as np
@@ -20,6 +21,26 @@ try:
 except Exception:  # optional runtime dependency in some environments
     pyphen = None
 
+
+
+
+def extract_typography_directives(markdown_text: str) -> List[Dict[str, Any]]:
+    directives: List[Dict[str, Any]] = []
+    for line in markdown_text.splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        if raw.startswith("#"):
+            content = raw.lstrip("#").strip()
+            if content:
+                directives.append({"kind": "headline", "text": content})
+        spaced = re.search(r"\b(?:[A-Za-z]\s+){3,}[A-Za-z]\b", raw.replace("&nbsp;", " "))
+        if spaced:
+            directives.append({"kind": "spaced", "text": spaced.group(0)})
+        tiny = re.findall(r"\*([a-z]{3,10})\*", raw)
+        for token in tiny:
+            directives.append({"kind": "tiny", "text": token})
+    return directives
 
 def parse_trim_size(size: str) -> Tuple[float, float]:
     w, h = size.lower().split("x")

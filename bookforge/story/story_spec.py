@@ -12,6 +12,111 @@ import requests
 from bookforge.story.storyweaver_parser import detect_storyweaver_format, parse_storyweaver_markdown
 
 
+_STORYWEAVER_PAGE_RE = re.compile(r"^Pages\s*(\d+)\s*[\-–]\s*(\d+)(.*)$", re.IGNORECASE)
+
+
+def _extract_tagged_blocks(text: str) -> List[Tuple[str, str]]:
+    blocks: List[Tuple[str, str]] = []
+    current_tag = ""
+    current_lines: List[str] = []
+    for line in text.splitlines():
+        marker = re.match(r"^\[(.+?)\](.*)$", line.strip())
+        if marker:
+            tag_content = marker.group(1).strip()
+            if re.match(r"^(ILLUSTRATION NOTE:|PAGE TURN\s*[—\-])", tag_content, flags=re.IGNORECASE):
+                current_lines.append(line.strip())
+                continue
+            if current_tag or current_lines:
+                blocks.append((current_tag, "\n".join(current_lines).strip("\n")))
+            current_tag = tag_content
+            trailing = marker.group(2).strip()
+            current_lines = [trailing] if trailing else []
+            continue
+        current_lines.append(line)
+    if current_tag or current_lines:
+        blocks.append((current_tag, "\n".join(current_lines).strip("\n")))
+    return blocks
+
+
+def _parse_storyweaver(text: str, default_pages: int) -> Dict[str, Any] | None:
+    blocks = _extract_tagged_blocks(text)
+    page_blocks = [(tag, body) for tag, body in blocks if _STORYWEAVER_PAGE_RE.match(tag)]
+    if not page_blocks:
+        return None
+
+    pages_map: Dict[int, Dict[str, Any]] = {}
+    extras: List[Dict[str, Any]] = []
+    spread_pairs: set[Tuple[int, int]] = set()
+    declared_pages = 0
+
+    for tag, body in blocks:
+        m = _STORYWEAVER_PAGE_RE.match(tag)
+        if not m:
+            extras.append({"section": tag or "Unlabeled", "content": body})
+            continue
+        start, end = int(m.group(1)), int(m.group(2))
+        declared_pages = max(declared_pages, start, end)
+        marker_tail = m.group(3) or ""
+        is_spread = (end == start + 1) or ("FULL DOUBLE-PAGE SPREAD" in marker_tail.upper()) or ("FULL DOUBLE-PAGE SPREAD" in body.upper())
+        if is_spread:
+            spread_pairs.add((start, end))
+
+        illustration_notes = [x.strip() for x in re.findall(r"\[ILLUSTRATION NOTE:\s*(.*?)\]", body, flags=re.IGNORECASE | re.DOTALL) if x.strip()]
+        page_turns = [x.strip() for x in re.findall(r"\[PAGE TURN\s*[—\-]\s*(.*?)\]", body, flags=re.IGNORECASE | re.DOTALL) if x.strip()]
+        hidden_details = [x.strip() for x in re.findall(r"\b(?:must include|required hidden detail|hidden detail)\s*[:\-]\s*(.+)", "\n".join(illustration_notes), flags=re.IGNORECASE)]
+
+        printed_markdown = re.sub(r"\[ILLUSTRATION NOTE:\s*.*?\]", "", body, flags=re.IGNORECASE | re.DOTALL)
+        printed_markdown = re.sub(r"\[PAGE TURN\s*[—\-]\s*.*?\]", "", printed_markdown, flags=re.IGNORECASE | re.DOTALL).strip("\n")
+        text_for_prompt = " ".join(line.strip() for line in printed_markdown.splitlines() if line.strip())
+
+        for page_no in range(start, end + 1):
+            pages_map[page_no] = {
+                "page_number": page_no,
+                "text": text_for_prompt,
+                "printed_markdown": printed_markdown,
+                "illustration_notes": illustration_notes,
+                "required_hidden_details": hidden_details,
+                "page_turn_markers": page_turns,
+            }
+
+    if declared_pages <= 0:
+        declared_pages = default_pages
+    pages = [
+        pages_map.get(
+            i,
+            {
+                "page_number": i,
+                "text": "",
+                "printed_markdown": "",
+                "illustration_notes": [],
+                "required_hidden_details": [],
+                "page_turn_markers": [],
+            },
+        )
+        for i in range(1, declared_pages + 1)
+    ]
+
+    companion = {item["section"]: item["content"] for item in extras if item.get("content")}
+    companion_text = "\n\n".join(f"{k}\n{v}" for k, v in companion.items())
+    seller_line = ""
+    pitch = ""
+    quote = re.search(r"THE LINE THAT SELLS THE BOOK\s*[:\-]\s*[\"“]?(.+?)[\"”]?(?:\n|$)", companion_text, flags=re.IGNORECASE)
+    if quote:
+        seller_line = quote.group(1).strip()
+    pitch_m = re.search(r"(?:one[- ]sentence pitch|book pitch)\s*[:\-]\s*(.+?)(?:\n|$)", companion_text, flags=re.IGNORECASE)
+    if pitch_m:
+        pitch = pitch_m.group(1).strip()
+
+    return {
+        "pages": pages,
+        "declared_pages": declared_pages,
+        "spread_pairs": [list(pair) for pair in sorted(spread_pairs)],
+        "extras": extras,
+        "companion": companion,
+        "cover_copy": {"line_that_sells_the_book": seller_line, "one_sentence_pitch": pitch},
+    }
+
+
 def _extract_front_matter(raw: str) -> Tuple[Dict[str, Any], str]:
     if not raw.startswith("---\n"):
         return {}, raw
@@ -120,25 +225,36 @@ def parse_story(path: str | Path, pages: int, max_words_per_page_override: int |
     meta_limit = int(meta.get("max_words_per_page", "0") or 0)
     max_words_per_page = int(max_words_per_page_override or meta_limit or 0)
 
-    sections = re.split(r"(?:^|\n)##\s*Page\s*\d+[:\-]?", text, flags=re.IGNORECASE)
-    explicit = [s.strip() for s in sections if s.strip()]
-    if len(explicit) >= pages:
-        page_texts = explicit[:pages]
-    elif len(explicit) > 1:
-        padded = explicit[:]
-        while len(padded) < pages:
-            padded.append(padded[-1])
-        page_texts = padded[:pages]
+    storyweaver = _parse_storyweaver(text, pages)
+    parse_warnings: List[str] = []
+    if storyweaver:
+        declared_pages = int(storyweaver["declared_pages"])
+        if declared_pages != int(pages):
+            parse_warnings.append(f"Storyweaver declared pages={declared_pages}; ignoring requested pages={pages}.")
+        page_payload = storyweaver["pages"]
+        page_count = declared_pages
     else:
-        if max_words_per_page > 0:
-            page_texts = _split_with_word_limit(text, pages, max_words_per_page)
+        sections = re.split(r"(?:^|\n)##\s*Page\s*\d+[:\-]?", text, flags=re.IGNORECASE)
+        explicit = [s.strip() for s in sections if s.strip()]
+        if len(explicit) >= pages:
+            page_texts = explicit[:pages]
+        elif len(explicit) > 1:
+            padded = explicit[:]
+            while len(padded) < pages:
+                padded.append(padded[-1])
+            page_texts = padded[:pages]
         else:
-            page_texts = _split_never_empty(text, pages)
+            if max_words_per_page > 0:
+                page_texts = _split_with_word_limit(text, pages, max_words_per_page)
+            else:
+                page_texts = _split_never_empty(text, pages)
+        page_payload = [{"page_number": i + 1, "text": page_texts[i]} for i in range(pages)]
+        page_count = pages
 
     return {
         "title": title,
         "author": author,
-        "pages": [{"page_number": i + 1, "text": page_texts[i]} for i in range(pages)],
+        "pages": page_payload,
         "metadata": {
             "protagonist_name": meta.get("protagonist_name", ""),
             "wardrobe": meta.get("wardrobe", ""),
@@ -149,7 +265,16 @@ def parse_story(path: str | Path, pages: int, max_words_per_page_override: int |
             "cover_layout_preset": meta.get("cover_layout_preset", "front_title_top_back_blurb"),
             "age_band": meta.get("age_band", "6-8"),
             "max_words_per_page": max_words_per_page if max_words_per_page > 0 else None,
+            "storyweaver_detected": bool(storyweaver),
+            "declared_pages": storyweaver["declared_pages"] if storyweaver else page_count,
+            "storyweaver_spread_pairs": storyweaver["spread_pairs"] if storyweaver else [],
+            "cover_copy": storyweaver["cover_copy"] if storyweaver else {},
         },
+        "declared_pages": storyweaver["declared_pages"] if storyweaver else page_count,
+        "spread_pairs": storyweaver["spread_pairs"] if storyweaver else [],
+        "extras": storyweaver["extras"] if storyweaver else [],
+        "companion": storyweaver["companion"] if storyweaver else {},
+        "parse_warnings": parse_warnings,
     }
 
 

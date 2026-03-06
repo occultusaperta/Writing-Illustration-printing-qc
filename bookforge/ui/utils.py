@@ -308,3 +308,11 @@ def open_in_system_viewer(path: str | Path) -> bool:
         return True
     except Exception:
         return False
+
+
+def detect_storyweaver_summary(parsed_story: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = parsed_story.get("metadata", {}) if isinstance(parsed_story, dict) else {}
+    detected = bool(metadata.get("storyweaver_detected", False))
+    declared = int(metadata.get("declared_pages", len(parsed_story.get("pages", [])) if isinstance(parsed_story, dict) else 0) or 0)
+    spreads = metadata.get("storyweaver_spread_pairs", []) if isinstance(metadata, dict) else []
+    return {"detected": detected, "declared_pages": declared, "spreads": spreads}
