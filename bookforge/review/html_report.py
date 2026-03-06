@@ -38,12 +38,16 @@ def generate_report(out_dir: Path, selected_pages: List[Path], qa_report: Dict[s
     hook_pack = {}
     dual_address = {}
     artifact_map = []
+    companion_links: List[str] = []
     if (review / "hook_pack.json").exists():
         hook_pack = json.loads((review / "hook_pack.json").read_text(encoding="utf-8"))
     if (out_dir / "preprod" / "editorial" / "dual_address.json").exists():
         dual_address = json.loads((out_dir / "preprod" / "editorial" / "dual_address.json").read_text(encoding="utf-8"))
     if (review / "hidden_artifacts_map.json").exists():
         artifact_map = json.loads((review / "hidden_artifacts_map.json").read_text(encoding="utf-8"))
+    companion_dir = review / "companion"
+    if companion_dir.exists():
+        companion_links = [f"companion/{p.name}" for p in sorted(companion_dir.glob("*.md"))]
 
     fatigue = dual_address.get("read_aloud_fatigue_risk", {})
     rows = []
@@ -81,6 +85,7 @@ def generate_report(out_dir: Path, selected_pages: List[Path], qa_report: Dict[s
 <li>Worst drift pages: {html.escape(json.dumps(worst))}</li>
 <li>Regenerated pages: {html.escape(json.dumps(regen))}</li>
 <li>Cache hit rate: {cache_rate:.2%}</li>
+<li>Companion artifacts: {html.escape(json.dumps(companion_links))}</li>
 </ul>
 </body></html>"""
 

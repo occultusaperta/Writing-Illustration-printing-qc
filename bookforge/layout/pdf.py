@@ -109,7 +109,34 @@ class PDFLayoutEngine:
         c.setFillColor(main_color)
         c.drawCentredString(x, y, text)
 
-    def render_interior(self, pages: List[Dict[str, Any]], image_paths: List[str], output_interior: Path, size: str, bleed_in: float, safe_margin_in: float, layout_preset: Dict[str, Any], typography_preset: Dict[str, Any], pdf_options: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def _draw_typography_overlays(self, c: canvas.Canvas, directives: List[Dict[str, Any]], page_w: float, page_h: float, safe_x: float, safe_y: float, safe_w: float, safe_h: float) -> None:
+        for i, d in enumerate(directives):
+            kind = str(d.get("type", "")).strip()
+            if kind == "display_word":
+                txt = str(d.get("text", "")).strip()
+                if not txt:
+                    continue
+                c.setFont(self.font_name, 58)
+                self._draw_stroked_centred_text(c, page_w / 2, safe_y + safe_h * 0.24, txt, black, white, stroke_offset=1.4)
+            elif kind == "micro_word":
+                txt = str(d.get("text", "")).strip()
+                if not txt:
+                    continue
+                c.setFont(self.font_name, 8)
+                drift = i * 6
+                self._draw_stroked_centred_text(c, page_w * 0.52, safe_y + 20 - drift, txt, black, white, stroke_offset=0.6)
+            elif kind == "spaced_words":
+                frag = str(d.get("raw_fragment", "")).replace("&nbsp;", " ").strip()
+                tokens = [t for t in frag.split() if t]
+                if not tokens:
+                    continue
+                c.setFont(self.font_name, 14)
+                y = safe_y + safe_h * 0.12
+                step = safe_w / (len(tokens) + 1)
+                for t_idx, tok in enumerate(tokens, start=1):
+                    self._draw_stroked_centred_text(c, safe_x + step * t_idx, y, tok, black, white, stroke_offset=0.8)
+
+    def render_interior(self, pages: List[Dict[str, Any]], image_paths: List[str], output_interior: Path, size: str, bleed_in: float, safe_margin_in: float, layout_preset: Dict[str, Any], typography_preset: Dict[str, Any], pdf_options: Dict[str, Any] | None = None, spread_pairs: List[Tuple[int, int]] | None = None) -> Dict[str, Any]:
         trim_w, trim_h = parse_trim_size(size)
         page_w = (trim_w + bleed_in * 2) * 72
         page_h = (trim_h + bleed_in * 2) * 72
@@ -122,6 +149,7 @@ class PDFLayoutEngine:
         options = pdf_options or {}
         embed_mode = str(options.get("image_embed", "jpeg")).lower()
         jpeg_quality = int(options.get("jpeg_quality", 92))
+        spread_page_set = {p for pair in (spread_pairs or []) for p in pair}
         for page, img_path in zip(pages, image_paths):
             embed_path = Path(img_path)
             temp_path: Path | None = None
@@ -162,13 +190,16 @@ class PDFLayoutEngine:
                 raise RuntimeError(f"Text overflow could not be resolved on page {page['page_number']}. Reduce text or choose a larger panel preset.")
 
             para.drawOn(c, safe_x + layout_preset["panel_padding_pt"], panel_y + panel_h - layout_preset["panel_padding_pt"] - needed_h)
+            directives = page.get("typography_directives", []) if isinstance(page, dict) else []
+            if isinstance(directives, list) and directives:
+                self._draw_typography_overlays(c, directives, page_w, page_h, safe_x, safe_y, safe_w, safe_h)
             if layout_preset["show_page_numbers"]:
                 c.setFillColor(black)
                 c.setFont(self.font_name, 9)
                 c.drawRightString(page_w - safe_x, safe_y - 14, str(page["page_number"]))
             c.showPage()
         c.save()
-        return {"page_dimensions_pt": [page_w, page_h]}
+        return {"page_dimensions_pt": [page_w, page_h], "spread_page_set": sorted(spread_page_set)}
 
     def render_cover_wrap(self, output_cover: Path, output_guides: Path, trim_w: float, trim_h: float, bleed_in: float, safe_margin_in: float, page_count: int, spine_w: float, title: str, author: str, approved_cover: Path, approved_style: Path, cover_preset: Dict[str, Any], cover_config: Dict[str, Any]) -> Dict[str, Any]:
         cover_w = 2 * trim_w + spine_w + 2 * bleed_in
