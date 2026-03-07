@@ -5,14 +5,17 @@ from typing import Any, Dict
 from bookforge.dual_audience.adult_channel import score_adult_channel
 from bookforge.dual_audience.child_channel import score_child_channel
 from bookforge.dual_audience.types import DualAudienceScoreResult
+from bookforge.scoring_registry import scoring_registry
 from bookforge.utils import clamp01
 
 
 def score_dual_audience(
     report: Dict[str, Any],
     *,
-    minimum_channel_threshold: float = 0.3,
+    minimum_channel_threshold: float | None = None,
 ) -> DualAudienceScoreResult:
+    if minimum_channel_threshold is None:
+        minimum_channel_threshold = scoring_registry().thresholds.dual_audience_minimum_channel_threshold
     metadata = report.get("metadata", {}) if isinstance(report.get("metadata", {}), dict) else {}
     child = score_child_channel(report, metadata)
     adult = score_adult_channel(report, metadata)
@@ -21,7 +24,8 @@ def score_dual_audience(
     balance_score = clamp01(1.0 - (divergence / 0.6))
     balance_penalty = clamp01(max(0.0, divergence - 0.2) * 0.5)
 
-    base = 0.52 * child.composite_score + 0.48 * adult.composite_score
+    base_weights = scoring_registry().dual_audience.base_weights
+    base = base_weights["child"] * child.composite_score + base_weights["adult"] * adult.composite_score
     threshold_penalty = 0.0
     warnings: list[str] = []
     notes: list[str] = []
@@ -36,7 +40,7 @@ def score_dual_audience(
     if balance_score > 0.8:
         notes.append("Child/adult channels are reasonably balanced.")
 
-    composite = clamp01(base + 0.06 * balance_score - balance_penalty - threshold_penalty)
+    composite = clamp01(base + scoring_registry().dual_audience.balance_bonus_weight * balance_score - balance_penalty - threshold_penalty)
     recommend_reject = bool(child.composite_score < 0.22 and adult.composite_score < 0.22)
     if recommend_reject:
         warnings.append("dual_audience_recommend_reject_both_channels_very_weak")

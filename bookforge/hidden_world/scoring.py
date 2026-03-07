@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from bookforge.hidden_world.types import HiddenWorldScoreResult
+from bookforge.scoring_registry import scoring_registry
 
 
 def _clip01(v: float) -> float:
@@ -58,13 +59,14 @@ def score_hidden_world_adherence(
         notes.append("No hidden-world guidance available; treated as safe bounded no-op.")
         required_presence = recurrence = subtlety_score = parent_reward_score = foreshadow_callback = 0.5
 
+    weights = scoring_registry().hidden_world.composite_weights
     composite = _clip01(
-        0.24 * required_presence
-        + 0.18 * recurrence
-        + 0.16 * subtlety_score
-        + 0.14 * parent_reward_score
-        + 0.14 * foreshadow_callback
-        + 0.14 * (1.0 - text_collision_risk)
+        weights["required_presence"] * required_presence
+        + weights["recurrence"] * recurrence
+        + weights["subtlety"] * subtlety_score
+        + weights["parent_reward"] * parent_reward_score
+        + weights["foreshadow_callback"] * foreshadow_callback
+        + weights["text_safety"] * (1.0 - text_collision_risk)
     )
     confidence = _clip01(0.4 + 0.2 * bool(hidden_world_guidance) + 0.2 * bool(prompt_metadata) + 0.2 * bool(saliency_score))
 

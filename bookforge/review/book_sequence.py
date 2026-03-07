@@ -14,6 +14,7 @@ from bookforge.hidden_world import build_hidden_world_sequence_finding
 from bookforge.hidden_world.types import HiddenWorldSequenceFinding
 from bookforge.dual_audience.sequence import build_dual_audience_report
 from bookforge.page_turn import build_page_turn_tension_report
+from bookforge.scoring_registry import scoring_registry, transition_target
 from bookforge.utils import clamp01
 
 
@@ -140,9 +141,9 @@ def _build_color_transition_findings(
         realized_delta = float(to_best.get("page_to_page_hist_drift", 0.0) or 0.0)
 
         if expected_mode == "hard_cut":
-            severity = abs(realized_delta - max(0.45, expected_strength * 0.8))
+            severity = abs(realized_delta - transition_target("hard_cut", expected_strength))
         else:
-            severity = abs(realized_delta - min(0.22, expected_strength * 0.45))
+            severity = abs(realized_delta - transition_target("blend", expected_strength))
         severity = clamp01(severity)
         score = clamp01(1.0 - severity)
 
@@ -593,8 +594,19 @@ def build_book_sequence_report(
     if not summary_notes:
         summary_notes.append("Sequence diagnostics completed with no major warnings.")
 
+    overall_weights = scoring_registry().sequence_review.overall_weights
     overall = round(
-        clamp01(0.195 * color_score + 0.175 * architecture_flow.summary_score + 0.15 * energy_curve.mismatch_score + 0.11 * camera_sequence.summary_score + 0.1 * saliency_flow_sequence.summary_score + 0.09 * typography_sequence.summary_score + 0.09 * hidden_world_sequence.summary_score + 0.08 * dual_audience_report.summary_score + 0.01 * page_turn_report.summary_score),
+        clamp01(
+            overall_weights["color"] * color_score
+            + overall_weights["architecture"] * architecture_flow.summary_score
+            + overall_weights["energy_curve"] * energy_curve.mismatch_score
+            + overall_weights["camera"] * camera_sequence.summary_score
+            + overall_weights["saliency"] * saliency_flow_sequence.summary_score
+            + overall_weights["typography"] * typography_sequence.summary_score
+            + overall_weights["hidden_world"] * hidden_world_sequence.summary_score
+            + overall_weights["dual_audience"] * dual_audience_report.summary_score
+            + overall_weights["page_turn"] * page_turn_report.summary_score
+        ),
         4,
     )
 
