@@ -70,6 +70,7 @@ from bookforge.review.targeted_regeneration import (
     write_targeted_regeneration_report,
 )
 from bookforge.story.back_matter import generate_blurb_options
+from bookforge.storefront import build_storefront_optimization_report, score_cover_thumbnail, write_storefront_optimization_report
 from bookforge.story.prompt_compiler import compile_prompt, tighten_prompt
 from bookforge.story.story_spec import build_bible_variants, parse_story
 from bookforge.story.storyboard import generate_storyboard
@@ -193,6 +194,10 @@ def _load_camera_sequence_plan(out: Path) -> Dict[int, Dict[str, Any]]:
 
 def _dynamic_typography_enabled() -> bool:
     return _feature_flag("BOOKFORGE_DYNAMIC_TYPOGRAPHY", default="true")
+
+
+def _storefront_optimization_enabled() -> bool:
+    return _feature_flag("BOOKFORGE_STOREFRONT_OPTIMIZATION", default="true")
 
 
 def _build_typography_plans(
@@ -510,6 +515,26 @@ class BookforgePipeline:
             }
             (variant_dir / "variant_review.json").write_text(json.dumps(references, indent=2), encoding="utf-8")
 
+        storefront_cover_rows = []
+        if _storefront_optimization_enabled():
+            for variant in bible_variants:
+                i = variant["variant"]
+                cover_path = preprod / "cover_options" / f"cover_concept_v{i}.png"
+                if cover_path.exists():
+                    diag = score_cover_thumbnail(cover_path, title_text_available=False)
+                    storefront_cover_rows.append({"variant": i, "cover_path": str(cover_path.relative_to(preprod)), "thumbnail": diag.to_dict()})
+            if storefront_cover_rows:
+                storefront_cover_rows = sorted(
+                    storefront_cover_rows,
+                    key=lambda r: (
+                        float(((r.get("thumbnail") or {}).get("aggregate") or {}).get("composite_score", 0.0) or 0.0),
+                        float(((r.get("thumbnail") or {}).get("aggregate") or {}).get("title_readability_score", 0.0) or 0.0),
+                    ),
+                    reverse=True,
+                )
+                (preprod / "storefront").mkdir(parents=True, exist_ok=True)
+                (preprod / "storefront" / "cover_thumbnail_candidates.json").write_text(json.dumps(storefront_cover_rows, indent=2), encoding="utf-8")
+
         option_images = sorted((preprod).rglob("*_v*.png"))
         generate_contact_sheet(option_images, preprod / "options_contact_sheet.pdf")
 
@@ -563,6 +588,7 @@ class BookforgePipeline:
             "approved_character": "character_turnaround_v1.png",
             "approved_style": "style_frame_v1.png",
             "approved_cover": "cover_concept_v1.png",
+            "storefront_recommended_cover": "",
             "interior_layout_preset": parsed["metadata"].get("interior_layout_preset", INTERIOR_LAYOUT_PRESETS[0].id),
             "typography_preset": parsed["metadata"].get("typography_preset", TYPOGRAPHY_PRESETS[0].id),
             "cover_layout_preset": parsed["metadata"].get("cover_layout_preset", COVER_LAYOUT_PRESETS[0].id),
@@ -624,6 +650,8 @@ class BookforgePipeline:
         }
         if profile_dict:
             approval = apply_profile(approval, profile_dict)
+        if storefront_cover_rows:
+            approval["storefront_recommended_cover"] = str(storefront_cover_rows[0].get("cover_path", ""))
         (preprod / "APPROVAL.json").write_text(json.dumps(approval, indent=2), encoding="utf-8")
         warnings = parsed.get("parse_warnings", [])
         return {"status": "PASS", "stage": "preprod", "out_dir": str(out), "warnings": warnings, "declared_pages": parsed.get("metadata", {}).get("declared_pages", pages), "storyweaver_detected": bool(parsed.get("metadata", {}).get("storyweaver_detected", False))}
@@ -742,6 +770,7 @@ class BookforgePipeline:
                 "back_cover_tagline_source": source_tagline if back_tagline else "story",
                 "back_cover_blurb_source": source_blurb if back_blurb else "story",
             },
+            "storefront": {"recommended_cover": approval.get("storefront_recommended_cover", "")},
         }
         editorial_dir = preprod / "editorial"
         if editorial_dir.exists():
@@ -1200,7 +1229,7 @@ class BookforgePipeline:
         )[:5]
         cache_bools = [hit for arr in cache_hits.values() for hit in arr]
         cache_hit_rate = (sum(1 for x in cache_bools if x) / len(cache_bools)) if cache_bools else 0.0
-        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "hidden_world": {"enabled": _hidden_world_enabled(), "planned_pages": len(hidden_world_by_page)}, "applied_page_architecture": applied_arch_review}
+        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "hidden_world": {"enabled": _hidden_world_enabled(), "planned_pages": len(hidden_world_by_page)}, "storefront": {"enabled": _storefront_optimization_enabled()}, "applied_page_architecture": applied_arch_review}
         write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
         _studio_debug("running premium visual QC")
@@ -1274,6 +1303,18 @@ class BookforgePipeline:
             encoding="utf-8",
         )
 
+        storefront_report = build_storefront_optimization_report(
+            selected=selected,
+            cover_path=str(lock.get("approved_cover", "")),
+            qa_attempts=qa_attempts,
+            color_script=(color_script_payload if isinstance(color_script_payload, dict) else {}),
+            architecture_plan=architecture_plan,
+            camera_sequence_plan=camera_by_page,
+            hidden_world_plan=(_load_json_if_exists(out / "preprod" / "planning" / "hidden_world_plan.json") if _hidden_world_enabled() else {}),
+            enabled=_storefront_optimization_enabled(),
+        )
+        write_storefront_optimization_report(review / "storefront_optimization_report.json", storefront_report)
+
         reselection_enabled = _feature_flag("BOOKFORGE_RESELECTION", "false")
         before_sequence_score = float(sequence_report.overall_sequence_score)
         reselection_report = run_bounded_reselection(
@@ -1321,6 +1362,17 @@ class BookforgePipeline:
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
                 (review / "typography_report.json").write_text(json.dumps(sequence_report.to_dict().get("typography_sequence", {}), indent=2), encoding="utf-8")
+                storefront_report = build_storefront_optimization_report(
+                    selected=selected,
+                    cover_path=str(lock.get("approved_cover", "")),
+                    qa_attempts=qa_attempts,
+                    color_script=(color_script_payload if isinstance(color_script_payload, dict) else {}),
+                    architecture_plan=architecture_plan,
+                    camera_sequence_plan=camera_by_page,
+                    hidden_world_plan=(_load_json_if_exists(out / "preprod" / "planning" / "hidden_world_plan.json") if _hidden_world_enabled() else {}),
+                    enabled=_storefront_optimization_enabled(),
+                )
+                write_storefront_optimization_report(review / "storefront_optimization_report.json", storefront_report)
                 reselection_report = with_reselection_sequence_improvement(
                     reselection_report,
                     before_score=before_sequence_score,
@@ -1470,6 +1522,17 @@ class BookforgePipeline:
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
                 (review / "typography_report.json").write_text(json.dumps(sequence_report.to_dict().get("typography_sequence", {}), indent=2), encoding="utf-8")
+                storefront_report = build_storefront_optimization_report(
+                    selected=selected,
+                    cover_path=str(lock.get("approved_cover", "")),
+                    qa_attempts=qa_attempts,
+                    color_script=(color_script_payload if isinstance(color_script_payload, dict) else {}),
+                    architecture_plan=architecture_plan,
+                    camera_sequence_plan=camera_by_page,
+                    hidden_world_plan=(_load_json_if_exists(out / "preprod" / "planning" / "hidden_world_plan.json") if _hidden_world_enabled() else {}),
+                    enabled=_storefront_optimization_enabled(),
+                )
+                write_storefront_optimization_report(review / "storefront_optimization_report.json", storefront_report)
                 targeted_report = with_targeted_regeneration_sequence_improvement(
                     targeted_report,
                     before_score=targeted_before_sequence_score,
@@ -1529,6 +1592,7 @@ class BookforgePipeline:
             "review/reselection_report.json",
             "review/targeted_regeneration_report.json",
             "review/hidden_world_report.json",
+            "review/storefront_optimization_report.json",
             "review/report.html",
         ]
 
@@ -1607,6 +1671,15 @@ class BookforgePipeline:
         else:
             warnings.append("Missing review/reselection_report.json")
         targeted_regen_report_path = review_dir / "targeted_regeneration_report.json"
+        storefront_report_path = review_dir / "storefront_optimization_report.json"
+        if storefront_report_path.exists():
+            storefront = json.loads(storefront_report_path.read_text(encoding="utf-8"))
+            for field in ["enabled", "look_inside", "first_pages_strength_score", "summary_score", "limitations"]:
+                if field not in storefront:
+                    failures.append(f"storefront_optimization_report.json missing {field}")
+        else:
+            warnings.append("Missing review/storefront_optimization_report.json")
+
         hidden_world_report_path = review_dir / "hidden_world_report.json"
         if hidden_world_report_path.exists():
             payload = json.loads(hidden_world_report_path.read_text(encoding="utf-8"))
