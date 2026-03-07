@@ -8,6 +8,7 @@ from bookforge.storefront.look_inside import build_look_inside_sequence_report
 from bookforge.storefront.sequence import build_storefront_sequence_findings
 from bookforge.storefront.thumbnail import score_cover_thumbnail
 from bookforge.storefront.types import CoverThumbnailDiagnostics, LookInsideSequenceReport, StorefrontOptimizationReport
+from bookforge.utils import clamp01
 
 
 def build_storefront_optimization_report(
@@ -63,7 +64,7 @@ def build_storefront_optimization_report(
 
     first_pages_strength = look.preview_segment_score
     cover_score = cover_diag.aggregate.composite_score if cover_diag else 0.0
-    summary_score = round(min(1.0, 0.45 * cover_score + 0.55 * first_pages_strength), 4)
+    summary_score = round(clamp01(0.45 * cover_score + 0.55 * first_pages_strength), 4)
 
     if cover_diag and cover_diag.aggregate.title_readability_score < 0.43:
         warnings.append("title_readability_at_thumbnail_is_weak")
