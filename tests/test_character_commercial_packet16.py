@@ -110,9 +110,9 @@ def test_verify_checks_character_commercial_artifact(tmp_path):
             if f.name == "preflight_report.json":
                 payload = {"status": "PASS"}
             elif f.name == "production_report.json":
-                payload = {"post": {"crop_mode": "smart", "director_grade_enabled": True, "tone_curve_preset": "storybook_lux"}, "qa_thresholds": {}, "cache_hit_rate": 1.0, "editorial": {"readaloud_script_enabled": False, "age_band": "6-8", "artifact_intensity": "light"}}
+                payload = {"post": {"crop_mode": "smart", "director_grade_enabled": True, "tone_curve_preset": "storybook_lux"}, "qa_thresholds": {}, "cache_hit_rate": 1.0, "editorial": {"readaloud_script_enabled": False, "age_band": "6-8", "artifact_intensity": "light"}, "dual_audience": {"enabled": False}, "page_turn_tension": {"enabled": False}}
             elif f.name == "book_sequence_report.json":
-                payload = {"overall_sequence_score": 0.8, "color_flow_summary_score": 0.8, "architecture_flow_summary_score": 0.8, "energy_curve_summary_score": 0.8, "weak_clusters": [], "saliency_flow_sequence": {}}
+                payload = {"overall_sequence_score": 0.8, "color_flow_summary_score": 0.8, "architecture_flow_summary_score": 0.8, "energy_curve_summary_score": 0.8, "weak_clusters": [], "saliency_flow_sequence": {}, "dual_audience_summary": {}}
             elif f.name == "reselection_report.json":
                 payload = {"config": {}, "considered_pages": [], "eligible_pages": [], "replaced_pages": [], "decisions": [], "sequence_improvement": {}}
             elif f.name == "targeted_regeneration_report.json":
@@ -127,6 +127,10 @@ def test_verify_checks_character_commercial_artifact(tmp_path):
                 payload = {"summary": {}, "pages": []}
             elif f.name == "sequence_optimization_report.json":
                 payload = {"enabled": False, "config": {}, "pages_considered": [], "candidate_moves_considered": 0, "accepted_moves": [], "rejected_moves": [], "cap_hit": False, "before_summary": {}, "after_summary": {}, "net_improvement": {}}
+            elif f.name == "dual_audience_report.json":
+                payload = {"enabled": False, "summary_score": 0.0, "child_channel_summary_score": 0.0, "adult_channel_summary_score": 0.0, "balance_summary_score": 0.0, "strongest_pages": [], "weakest_pages": [], "child_confusion_risk_pages": [], "adult_flatness_risk_pages": [], "imbalance_pages": [], "positive_notes": [], "warnings": [], "limitations": []}
+            elif f.name == "page_turn_tension_report.json":
+                payload = {"enabled": False, "summary_score": 0.0, "weak_turn_runs": [], "leftward_resistance_runs": [], "over_resolved_turns": [], "strong_turn_pages": [], "warnings": [], "positive_notes": [], "limitations": [], "findings": []}
             else:
                 payload = {}
             f.write_text(json.dumps(payload), encoding="utf-8")

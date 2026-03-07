@@ -66,10 +66,10 @@ def test_preprod_writes_color_script_planning_artifacts(monkeypatch, tmp_path: P
         def generate_option_image(self, *args, **kwargs):
             return _noop(*args, **kwargs)
 
-    bp.resolve_image_provider = lambda *_args, **_kwargs: (FakeIll(), "fake")
-    bp.generate_contact_sheet = lambda *_args, **_kwargs: None
-    bp.PDFLayoutEngine.render_interior_preview = lambda *a, **k: None
-    bp.PDFLayoutEngine.render_cover_preview = lambda *a, **k: None
+    monkeypatch.setattr(bp, "resolve_image_provider", lambda *_args, **_kwargs: (FakeIll(), "fake"))
+    monkeypatch.setattr(bp, "generate_contact_sheet", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bp.PDFLayoutEngine, "render_interior_preview", lambda *a, **k: None)
+    monkeypatch.setattr(bp.PDFLayoutEngine, "render_cover_preview", lambda *a, **k: None)
 
     res = BookforgePipeline().preprod(str(story), str(out), "8.5x8.5", 2, 1)
     assert res["status"] == "PASS"

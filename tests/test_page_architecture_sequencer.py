@@ -60,10 +60,10 @@ def test_preprod_architecture_artifacts_and_backward_compat(monkeypatch, tmp_pat
             p.parent.mkdir(parents=True, exist_ok=True)
             Image.new("RGB", (64, 64), (10, 20, 30)).save(p)
 
-    bp.resolve_image_provider = lambda *_args, **_kwargs: (FakeIll(), "fake")
-    bp.generate_contact_sheet = lambda *_args, **_kwargs: None
-    bp.PDFLayoutEngine.render_interior_preview = lambda *a, **k: None
-    bp.PDFLayoutEngine.render_cover_preview = lambda *a, **k: None
+    monkeypatch.setattr(bp, "resolve_image_provider", lambda *_args, **_kwargs: (FakeIll(), "fake"))
+    monkeypatch.setattr(bp, "generate_contact_sheet", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bp.PDFLayoutEngine, "render_interior_preview", lambda *a, **k: None)
+    monkeypatch.setattr(bp.PDFLayoutEngine, "render_cover_preview", lambda *a, **k: None)
 
     res = BookforgePipeline().preprod(str(story), str(out), "8.5x8.5", 3, 1)
     assert res["status"] == "PASS"
