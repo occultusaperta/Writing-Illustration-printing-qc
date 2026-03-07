@@ -13,6 +13,7 @@ from bookforge.saliency_flow.types import SaliencySequenceFinding
 from bookforge.hidden_world import build_hidden_world_sequence_finding
 from bookforge.hidden_world.types import HiddenWorldSequenceFinding
 from bookforge.dual_audience.sequence import build_dual_audience_report
+from bookforge.page_turn import build_page_turn_tension_report
 
 
 def _clamp01(value: float) -> float:
@@ -97,6 +98,7 @@ class BookSequenceReport:
     character_commercial_summary: Dict[str, Any]
     layout_search_summary: Dict[str, Any]
     dual_audience_summary: Dict[str, Any]
+    page_turn_tension_summary: Dict[str, Any]
     per_page_notes: List[Dict[str, Any]]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -521,6 +523,7 @@ def build_book_sequence_report(
     character_commercial_report: Dict[str, Any] | None = None,
     layout_search_report: Dict[str, Any] | None = None,
     dual_audience_enabled: bool = True,
+    page_turn_tension_enabled: bool = True,
 ) -> BookSequenceReport:
     color_script = color_script if isinstance(color_script, dict) else {}
     architecture_plan = architecture_plan if isinstance(architecture_plan, list) else []
@@ -551,6 +554,7 @@ def build_book_sequence_report(
     typography_sequence = build_typography_sequence_finding(typography_rows)
     hidden_world_sequence = build_hidden_world_sequence_finding(page_count=page_count, hidden_world_plan=hidden_world_plan, qa_attempts=qa_attempts)
     dual_audience_report = build_dual_audience_report(page_count=page_count, qa_attempts=qa_attempts, enabled=dual_audience_enabled)
+    page_turn_report = build_page_turn_tension_report(page_count=page_count, qa_attempts=qa_attempts, enabled=page_turn_tension_enabled)
 
     warnings: List[str] = []
     errors: List[str] = []
@@ -575,6 +579,8 @@ def build_book_sequence_report(
         warnings.append("Character commercial report absent; protagonist brandability diagnostics are limited.")
     if not layout_search_report:
         warnings.append("Layout search report absent; local layout exploration diagnostics are limited.")
+    if not page_turn_report.findings and page_turn_tension_enabled:
+        warnings.append("Page-turn tension metadata absent; turn-momentum diagnostics are limited.")
 
     summary_notes.extend(color_warnings)
     summary_notes.extend(architecture_flow.repeated_pattern_warnings[:2])
@@ -584,13 +590,14 @@ def build_book_sequence_report(
     summary_notes.extend(typography_sequence.sequence_notes[:1])
     summary_notes.extend(hidden_world_sequence.positive_rereadability_highlights[:1])
     summary_notes.extend(dual_audience_report.positive_notes[:1])
+    summary_notes.extend(page_turn_report.positive_notes[:1])
     summary_notes.extend([str(n) for n in character_commercial_report.get("warnings", [])[:1]])
     summary_notes.extend([str(n) for n in (layout_search_report.get("summary", {}) or {}).get("notes", [])[:1]])
     if not summary_notes:
         summary_notes.append("Sequence diagnostics completed with no major warnings.")
 
     overall = round(
-        _clamp01(0.2 * color_score + 0.18 * architecture_flow.summary_score + 0.15 * energy_curve.mismatch_score + 0.11 * camera_sequence.summary_score + 0.1 * saliency_flow_sequence.summary_score + 0.09 * typography_sequence.summary_score + 0.09 * hidden_world_sequence.summary_score + 0.08 * dual_audience_report.summary_score),
+        _clamp01(0.195 * color_score + 0.175 * architecture_flow.summary_score + 0.15 * energy_curve.mismatch_score + 0.11 * camera_sequence.summary_score + 0.1 * saliency_flow_sequence.summary_score + 0.09 * typography_sequence.summary_score + 0.09 * hidden_world_sequence.summary_score + 0.08 * dual_audience_report.summary_score + 0.01 * page_turn_report.summary_score),
         4,
     )
 
@@ -614,6 +621,7 @@ def build_book_sequence_report(
                 "dual_audience_child_score": float((((qa_by_page.get(p, {}).get("metadata", {}) or {}).get("dual_audience_score", {}) or {}).get("child_channel_score", {}) or {}).get("composite_score", 0.0) or 0.0),
                 "dual_audience_adult_score": float((((qa_by_page.get(p, {}).get("metadata", {}) or {}).get("dual_audience_score", {}) or {}).get("adult_channel_score", {}) or {}).get("composite_score", 0.0) or 0.0),
                 "dual_audience_balance_score": float((((qa_by_page.get(p, {}).get("metadata", {}) or {}).get("dual_audience_score", {}) or {}).get("balance_score", 0.0) or 0.0)),
+                "page_turn_tension_score": float((((qa_by_page.get(p, {}).get("metadata", {}) or {}).get("page_turn_tension_score", {}) or {}).get("page_turn_tension_score", 0.0) or 0.0)),
             }
         )
 
@@ -657,6 +665,17 @@ def build_book_sequence_report(
             "warnings": list(dual_audience_report.warnings),
             "positive_notes": list(dual_audience_report.positive_notes),
             "limitations": list(dual_audience_report.limitations),
+        },
+        page_turn_tension_summary={
+            "enabled": bool(page_turn_report.enabled),
+            "summary_score": float(page_turn_report.summary_score),
+            "weak_turn_runs": list(page_turn_report.weak_turn_runs),
+            "leftward_resistance_runs": list(page_turn_report.leftward_resistance_runs),
+            "over_resolved_turns": list(page_turn_report.over_resolved_turns),
+            "strong_turn_pages": list(page_turn_report.strong_turn_pages),
+            "warnings": list(page_turn_report.warnings),
+            "positive_notes": list(page_turn_report.positive_notes),
+            "limitations": list(page_turn_report.limitations),
         },
         per_page_notes=per_page_notes,
     )
