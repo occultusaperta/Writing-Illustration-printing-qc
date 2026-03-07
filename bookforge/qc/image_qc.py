@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from bookforge.qc.composition_qc import focus_bleed_overlap
+from bookforge.color_script.scoring import score_candidate_image_colors
 from bookforge.qc.gpu_batch_scoring import gpu_batch_scoring_enabled, score_candidate_batch
 from bookforge.qc.print_qc import analyze_print_qc, print_qc_warnings
 from bookforge.qc.visual_integrity import (
@@ -128,7 +129,15 @@ def _variant_report(path: Path, qa_config: Dict[str, Any], style_ref: Path | Non
     return report
 
 
-def choose_best_variant(paths: List[Path], qa_config: Dict[str, Any], style_ref: Path | None, prev_ref: Path | None) -> Tuple[Path, Dict[str, Any]]:
+def choose_best_variant(
+    paths: List[Path],
+    qa_config: Dict[str, Any],
+    style_ref: Path | None,
+    prev_ref: Path | None,
+    page_number: int | None = None,
+    page_color_spec: Dict[str, Any] | None = None,
+    master_palette: Dict[str, Any] | None = None,
+) -> Tuple[Path, Dict[str, Any]]:
     batch_scores: Dict[str, Dict[str, float]] = {}
     if gpu_batch_scoring_enabled():
         batch_scores = score_candidate_batch(paths)
@@ -138,6 +147,9 @@ def choose_best_variant(paths: List[Path], qa_config: Dict[str, Any], style_ref:
         gpu = batch_scores.get(report["path"])
         if gpu:
             report["gpu_batch_scores"] = gpu
+        if page_number is not None:
+            color_score = score_candidate_image_colors(report["path"], page_number=page_number, page_spec=page_color_spec, master_palette=master_palette)
+            report.setdefault("metadata", {})["color_score"] = color_score.to_dict()
 
     scored = sorted(
         reports,

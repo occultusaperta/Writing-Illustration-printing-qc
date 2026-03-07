@@ -106,6 +106,15 @@ def _build_planning_prompt_guidance(out: Path) -> Dict[int, Dict[str, Any]]:
     return guidance
 
 
+def _load_color_scoring_context(out: Path) -> tuple[Dict[int, Dict[str, Any]], Dict[str, Any]]:
+    planning_dir = out / "preprod" / "planning"
+    color_payload = _load_json_if_exists(planning_dir / "color_script.json") or {}
+    master_palette = _load_json_if_exists(planning_dir / "master_palette.json") or {}
+    page_specs = color_payload.get("pages", []) if isinstance(color_payload, dict) else []
+    page_spec_by_page = {int(x.get("page_number", 0)): x for x in page_specs if isinstance(x, dict)}
+    return page_spec_by_page, master_palette if isinstance(master_palette, dict) else {}
+
+
 def _build_prompt_addendum(page: Dict[str, Any], turn: Dict[str, Any], artifact: Dict[str, Any], editorial_mode: bool) -> str:
     parts: List[str] = []
     if turn:
@@ -743,6 +752,7 @@ class BookforgePipeline:
 
         prompts = []
         planning_prompt_guidance = _build_planning_prompt_guidance(out)
+        color_spec_by_page, master_palette = _load_color_scoring_context(out)
         _studio_debug("studio start: building prompts")
         turn_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("page_turn_map", []) if isinstance(x, dict)}
         artifact_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("resolved_artifacts_map", []) if isinstance(x, dict)}
@@ -825,7 +835,15 @@ class BookforgePipeline:
                 graded_path = out / "images" / "variants" / raw_path.name
                 self._postprocess_variant(raw_path, graded_path, Path(lock["approved_style"]), lock, no)
                 variant_paths.append(graded_path)
-            best_path, qa = choose_best_variant(variant_paths, lock["qa"], Path(lock["approved_style"]), prev_ref)
+            best_path, qa = choose_best_variant(
+                variant_paths,
+                lock["qa"],
+                Path(lock["approved_style"]),
+                prev_ref,
+                page_number=no,
+                page_color_spec=color_spec_by_page.get(no),
+                master_palette=master_palette,
+            )
             qa_attempts.append({"page": no, "attempt": 1, **qa})
             rounds = 0
             hard_prompt = prompts[no - 1]["prompt"]
@@ -841,7 +859,15 @@ class BookforgePipeline:
                     graded_path = out / "images" / "variants" / raw_path.name
                     self._postprocess_variant(raw_path, graded_path, Path(lock["approved_style"]), lock, no)
                     regen_variants.append(graded_path)
-                best_path, qa = choose_best_variant(regen_variants, lock["qa"], Path(lock["approved_style"]), prev_ref)
+                best_path, qa = choose_best_variant(
+                    regen_variants,
+                    lock["qa"],
+                    Path(lock["approved_style"]),
+                    prev_ref,
+                    page_number=no,
+                    page_color_spec=color_spec_by_page.get(no),
+                    master_palette=master_palette,
+                )
                 if qa.get("best", {}).get("focus_bleed_overlap", 0.0) > lock["qa"].get("max_focus_bleed_overlap", 0.15):
                     hard_prompt = f"{hard_prompt} subject centered within safe area, keep key action away from edges"
                 qa_attempts.append({"page": no, "attempt": rounds + 1, **qa})
@@ -887,13 +913,37 @@ class BookforgePipeline:
                 spread_path = Path(spread["variants"][a][0])
                 spread_graded = out / "images" / "variants" / spread_path.name
                 self._postprocess_variant(spread_path, spread_graded, Path(lock["approved_style"]), lock, a)
-                _, spread_qa = choose_best_variant([spread_graded], lock["qa"], Path(lock["approved_style"]), None)
+                _, spread_qa = choose_best_variant(
+                    [spread_graded],
+                    lock["qa"],
+                    Path(lock["approved_style"]),
+                    None,
+                    page_number=a,
+                    page_color_spec=color_spec_by_page.get(a),
+                    master_palette=master_palette,
+                )
                 qa_attempts.append({"page": f"{a}-{b}", "attempt": spread_round, "spread": True, **spread_qa})
                 if not spread_qa["passes"]:
                     continue
                 self._split_spread(spread_path, Path(selected[a - 1]), Path(selected[b - 1]))
-                left_best, left_qa = choose_best_variant([Path(selected[a - 1])], lock["qa"], Path(lock["approved_style"]), Path(selected[a - 2]) if a > 1 else None)
-                right_best, right_qa = choose_best_variant([Path(selected[b - 1])], lock["qa"], Path(lock["approved_style"]), Path(selected[a - 1]))
+                left_best, left_qa = choose_best_variant(
+                    [Path(selected[a - 1])],
+                    lock["qa"],
+                    Path(lock["approved_style"]),
+                    Path(selected[a - 2]) if a > 1 else None,
+                    page_number=a,
+                    page_color_spec=color_spec_by_page.get(a),
+                    master_palette=master_palette,
+                )
+                right_best, right_qa = choose_best_variant(
+                    [Path(selected[b - 1])],
+                    lock["qa"],
+                    Path(lock["approved_style"]),
+                    Path(selected[a - 1]),
+                    page_number=b,
+                    page_color_spec=color_spec_by_page.get(b),
+                    master_palette=master_palette,
+                )
                 qa_attempts.append({"page": a, "attempt": spread_round, "spread_half": "left", **left_qa})
                 qa_attempts.append({"page": b, "attempt": spread_round, "spread_half": "right", **right_qa})
                 spread_ok = bool(left_qa["passes"] and right_qa["passes"])
