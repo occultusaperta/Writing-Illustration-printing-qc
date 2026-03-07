@@ -1,17 +1,16 @@
 # Local Flux Service Contract
 
-BookForge now supports a structured local Flux HTTP contract used by `flux_local` provider.
+BookForge supports a practical local Flux HTTP contract used by the `flux_local` provider.
 
 ## Endpoints
 
-- `GET /health` → `{"status":"ok","service":"flux_local","supports":["/generate","/batch"]}`
+- `GET /health` → status, service info, runtime mode, model.
 - `POST /generate` request fields:
-  - `prompt`, `width`, `height`
-  - optional `negative_prompt`, `steps`, `seed`
-  - optional `quality_preset`: `draft|premium|ultimate`
-  - optional `reference_image` (base64 PNG)
-  - optional `lora_slots` list
-  - optional `spread` object
+  - required: `prompt`, `width`, `height`
+  - optional: `negative_prompt`, `steps`, `seed`, `guidance`
+  - optional: `quality_preset`: `draft|premium|ultimate`
+  - optional: `references` (list of base64 PNG strings or file paths before provider encoding)
+  - optional: `lora_slots`, `spread`, `variant_count`, `model_name`
 - `POST /batch` with `{ "requests": [ ...generate payloads... ] }`
 
 ## Response schema
@@ -19,26 +18,32 @@ BookForge now supports a structured local Flux HTTP contract used by `flux_local
 `/generate` returns:
 
 - `image_b64`
+- `image_path`
 - `seed`
 - `provider`
 - `model`
 - `elapsed_ms`
 - `cache_key`
-- `provenance` object
+- `provenance` object (`runtime_mode`, `references`, `variant_count`)
 
-## Running scaffold service
-
-A lightweight stub server exists for local contract testing:
+## Running the service
 
 ```bash
-python -m bookforge.illustration.providers.flux_local_service
+python -m bookforge.illustration.providers.flux_local_service --host 0.0.0.0 --port 8188
 ```
 
-Use env var:
+Use environment variables:
 
 ```bash
 export BOOKFORGE_IMAGE_PROVIDER=flux_local
 export BOOKFORGE_FLUX_LOCAL_URL=http://127.0.0.1:8188/generate
+export BOOKFORGE_FLUX_RUNTIME_MODE=fallback   # or diffusers on a real GPU host
+export BOOKFORGE_FLUX_MODEL=black-forest-labs/FLUX.1-schnell
 ```
 
-This scaffold intentionally does not claim production-quality Flux rendering.
+## Runtime mode behavior
+
+- `fallback`: deterministic placeholder rendering with full contract/provenance/timing.
+- `diffusers`: attempts real model execution via `diffusers` + `torch` on a GPU runtime.
+
+If `diffusers` dependencies are missing, the service returns explicit runtime errors (`runtime_unavailable`) rather than pretending generation succeeded.

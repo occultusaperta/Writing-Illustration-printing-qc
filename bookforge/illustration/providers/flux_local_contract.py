@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, asdict, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List
 
 
@@ -28,21 +28,30 @@ class FluxGenerateRequest:
     negative_prompt: str = ""
     steps: int = 4
     seed: int | None = None
+    guidance: float | None = None
     quality_preset: str = "draft"
-    reference_images_b64: List[str] = field(default_factory=list)
+    references: List[str] = field(default_factory=list)
     lora_slots: List[Dict[str, Any]] = field(default_factory=list)
     spread: Dict[str, Any] = field(default_factory=dict)
+    variant_count: int = 1
+    model_name: str | None = None
 
     def to_payload(self) -> Dict[str, Any]:
         d = asdict(self)
-        if self.quality_preset in QUALITY_PRESETS:
-            d["quality"] = asdict(QUALITY_PRESETS[self.quality_preset])
+        quality = QUALITY_PRESETS.get(self.quality_preset)
+        if quality:
+            d["quality"] = asdict(quality)
+            if self.guidance is None:
+                d["guidance"] = quality.guidance_scale
+            if self.steps <= 0:
+                d["steps"] = quality.steps
         return d
 
 
 @dataclass
 class FluxGenerateResponse:
     image_b64: str
+    image_path: str
     seed: int
     provider: str
     model: str
@@ -63,6 +72,7 @@ def parse_generate_response(data: Dict[str, Any]) -> FluxGenerateResponse:
     prov = data.get("provenance", {}) if isinstance(data.get("provenance"), dict) else {}
     return FluxGenerateResponse(
         image_b64=image_b64,
+        image_path=str(data.get("image_path", "")),
         seed=int(data.get("seed", 0)),
         provider=str(data.get("provider", "flux_local")),
         model=str(data.get("model", "flux")),
