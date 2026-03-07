@@ -6,6 +6,9 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Dict, List
 
+from bookforge.saliency_flow import build_saliency_sequence_finding
+from bookforge.saliency_flow.types import SaliencySequenceFinding
+
 
 def _clamp01(value: float) -> float:
     return float(max(0.0, min(1.0, value)))
@@ -83,6 +86,7 @@ class BookSequenceReport:
     energy_curve: EnergyCurveFinding
     weak_clusters: List[WeakClusterFinding]
     camera_sequence: CameraSequenceFinding
+    saliency_flow_sequence: SaliencySequenceFinding
     per_page_notes: List[Dict[str, Any]]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -524,6 +528,7 @@ def build_book_sequence_report(
     energy_curve = _build_energy_curve(architecture_plan, applied_arch_rows, premium_pages)
     weak_clusters = _build_weak_clusters(page_count, applied_arch_rows, premium_pages, color_findings)
     camera_sequence = _build_camera_sequence_findings(page_count, camera_sequence_plan, architecture_plan)
+    saliency_flow_sequence = build_saliency_sequence_finding(page_count, qa_attempts, camera_sequence_plan)
 
     warnings: List[str] = []
     errors: List[str] = []
@@ -538,16 +543,19 @@ def build_book_sequence_report(
         warnings.append("Premium visual QC pages absent; energy and weak-cluster diagnostics are limited.")
     if not camera_sequence_plan:
         warnings.append("Camera sequence plan absent; cinematic diagnostics are limited.")
+    if not qa_attempts:
+        warnings.append("QA attempts absent; saliency-flow sequence diagnostics are limited.")
 
     summary_notes.extend(color_warnings)
     summary_notes.extend(architecture_flow.repeated_pattern_warnings[:2])
     summary_notes.extend(energy_curve.climax_warnings[:1])
     summary_notes.extend(camera_sequence.opening_warnings[:1])
+    summary_notes.extend(saliency_flow_sequence.camera_mismatch_warnings[:1])
     if not summary_notes:
         summary_notes.append("Sequence diagnostics completed with no major warnings.")
 
     overall = round(
-        _clamp01(0.30 * color_score + 0.30 * architecture_flow.summary_score + 0.25 * energy_curve.mismatch_score + 0.15 * camera_sequence.summary_score),
+        _clamp01(0.27 * color_score + 0.25 * architecture_flow.summary_score + 0.2 * energy_curve.mismatch_score + 0.13 * camera_sequence.summary_score + 0.15 * saliency_flow_sequence.summary_score),
         4,
     )
 
@@ -564,6 +572,7 @@ def build_book_sequence_report(
                 ),
                 "color_transition_to_page_score": next((f.score for f in color_findings if f.to_page == p), None),
                 "shot_type": str((camera_sequence_plan.get(p) or {}).get("shot_type", "")),
+                "saliency_flow_score": float(((qa_by_page.get(p, {}).get("metadata", {}) or {}).get("saliency_flow_score", {}) or {}).get("composite_score", 0.0) or 0.0),
             }
         )
 
@@ -581,6 +590,7 @@ def build_book_sequence_report(
         energy_curve=energy_curve,
         weak_clusters=weak_clusters,
         camera_sequence=camera_sequence,
+        saliency_flow_sequence=saliency_flow_sequence,
         per_page_notes=per_page_notes,
     )
 

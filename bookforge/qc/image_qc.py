@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -14,6 +15,7 @@ from bookforge.color_script.scoring import score_candidate_image_colors
 from bookforge.qc.gpu_batch_scoring import gpu_batch_scoring_enabled, score_candidate_batch
 from bookforge.qc.ensemble_visual import evaluate_visual_ensemble
 from bookforge.camera_language.scoring import score_shot_adherence
+from bookforge.saliency_flow import score_saliency_flow
 from bookforge.qc.print_qc import analyze_print_qc, print_qc_warnings
 from bookforge.qc.visual_integrity import (
     border_artifact_score,
@@ -145,7 +147,9 @@ def choose_best_variant(
     architecture_variant: Dict[str, Any] | None = None,
     age_range: str | None = None,
     shot_plan_entry: Dict[str, Any] | None = None,
+    prompt_metadata: Dict[str, Any] | None = None,
 ) -> Tuple[Path, Dict[str, Any]]:
+    saliency_flow_enabled = str(os.getenv("BOOKFORGE_SALIENCY_FLOW", "true")).strip().lower() in {"1", "true", "yes", "on"}
     batch_scores: Dict[str, Dict[str, float]] = {}
     if gpu_batch_scoring_enabled():
         batch_scores = score_candidate_batch(paths)
@@ -199,6 +203,15 @@ def choose_best_variant(
         shot_score = score_shot_adherence(report, shot_plan_entry)
         if shot_score is not None:
             metadata["shot_adherence_score"] = shot_score.to_dict()
+        if saliency_flow_enabled:
+            saliency_score = score_saliency_flow(
+                report["path"],
+                page_number=page_number,
+                architecture_variant=architecture_variant,
+                shot_plan_entry=shot_plan_entry,
+                prompt_metadata=prompt_metadata,
+            )
+            metadata["saliency_flow_score"] = saliency_score.to_dict()
 
     scored = sorted(
         reports,
@@ -210,6 +223,7 @@ def choose_best_variant(
             (r.get("gpu_batch_scores") or {}).get("ranking_score", 0.0),
             ((r.get("metadata") or {}).get("page_architecture_score") or {}).get("composite_score", 0.0),
             0.15 * (((r.get("metadata") or {}).get("shot_adherence_score") or {}).get("composite_score", 0.0)),
+            0.05 * (((r.get("metadata") or {}).get("saliency_flow_score") or {}).get("composite_score", 0.0)),
         ),
         reverse=True,
     )

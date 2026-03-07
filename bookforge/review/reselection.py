@@ -75,7 +75,8 @@ def _score_local(candidate: Dict[str, Any]) -> float:
     color = ((metadata.get("color_score") or {}).get("composite_score", 0.5)) if isinstance(metadata, dict) else 0.5
     ensemble = ((metadata.get("visual_ensemble") or {}).get("ensemble_score", 0.5)) if isinstance(metadata, dict) else 0.5
     arch = ((metadata.get("page_architecture_score") or {}).get("composite_score", 0.5)) if isinstance(metadata, dict) else 0.5
-    return round(_clamp01(0.4 * float(color) + 0.35 * float(ensemble) + 0.25 * float(arch)), 6)
+    saliency = ((metadata.get("saliency_flow_score") or {}).get("composite_score", 0.5)) if isinstance(metadata, dict) else 0.5
+    return round(_clamp01(0.37 * float(color) + 0.33 * float(ensemble) + 0.22 * float(arch) + 0.08 * float(saliency)), 6)
 
 
 def _transition_target(mode: str, strength: float) -> float:
@@ -125,7 +126,8 @@ def _severe_local_issue(candidate: Dict[str, Any]) -> bool:
     color = float(((metadata.get("color_score") or {}).get("composite_score", 1.0)) or 1.0)
     ensemble = float(((metadata.get("visual_ensemble") or {}).get("ensemble_score", 1.0)) or 1.0)
     arch = float(((metadata.get("page_architecture_score") or {}).get("composite_score", 1.0)) or 1.0)
-    return color < 0.68 or ensemble < 0.7 or arch < 0.65
+    saliency = float(((metadata.get("saliency_flow_score") or {}).get("composite_score", 1.0)) or 1.0)
+    return color < 0.68 or ensemble < 0.7 or arch < 0.65 or saliency < 0.45
 
 
 def _candidate_pool_by_page(qa_attempts: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
