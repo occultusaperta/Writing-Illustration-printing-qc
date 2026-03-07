@@ -39,6 +39,7 @@ from bookforge.page_architecture.types import to_primitive as arch_to_primitive
 from bookforge.page_architecture.layout_apply import build_layout_application_map
 from bookforge.camera_language import plan_camera_sequence, write_planning_artifact as write_camera_planning_artifact
 from bookforge.camera_language.prompting import build_camera_guidance, build_camera_negative_lines, build_camera_prompt_lines
+from bookforge.typography import build_typography_sequence_finding, plan_page_typography, score_typography_plan
 from bookforge.profiles import apply_profile, load_profile
 from bookforge.qc.image_qc import choose_best_variant, write_qa_report
 from bookforge.qc.kdp_preflight import KDPPreflight
@@ -154,6 +155,44 @@ def _load_camera_sequence_plan(out: Path) -> Dict[int, Dict[str, Any]]:
         return {}
     rows = payload.get("pages", []) if isinstance(payload.get("pages", []), list) else []
     return {int(row.get("page_number", 0)): row for row in rows if isinstance(row, dict) and int(row.get("page_number", 0)) > 0}
+
+
+def _dynamic_typography_enabled() -> bool:
+    return _feature_flag("BOOKFORGE_DYNAMIC_TYPOGRAPHY", default="true")
+
+
+def _build_typography_plans(
+    *,
+    parsed: Dict[str, Any],
+    architecture_by_page: Dict[int, Dict[str, Any]],
+    camera_by_page: Dict[int, Dict[str, Any]],
+    age_band: str,
+) -> Dict[int, Dict[str, Any]]:
+    if not _dynamic_typography_enabled():
+        return {}
+    plans: Dict[int, Dict[str, Any]] = {}
+    for page in parsed.get("pages", []):
+        if not isinstance(page, dict):
+            continue
+        page_no = int(page.get("page_number", 0) or 0)
+        if page_no <= 0:
+            continue
+        markdown = str(page.get("text", ""))
+        plan = plan_page_typography(
+            page_number=page_no,
+            printed_markdown=markdown,
+            illustration_notes=str(page.get("illustration_notes", "")),
+            page_architecture_context=architecture_by_page.get(page_no, {}),
+            camera_context=camera_by_page.get(page_no, {}),
+            saliency_context={},
+            color_context={},
+            age_band=age_band,
+        )
+        score = score_typography_plan(plan, page_architecture_context=architecture_by_page.get(page_no, {}))
+        payload = plan.to_dict()
+        payload["typography_score"] = score.to_dict()
+        plans[page_no] = payload
+    return plans
 
 def _load_architecture_scoring_context(out: Path) -> Dict[int, Dict[str, Any]]:
     planning_dir = out / "preprod" / "planning"
@@ -818,6 +857,17 @@ class BookforgePipeline:
         color_spec_by_page, master_palette = _load_color_scoring_context(out)
         architecture_by_page = _load_architecture_scoring_context(out)
         camera_by_page = _load_camera_sequence_plan(out) if _feature_flag("BOOKFORGE_CAMERA_LANGUAGE", default="true") else {}
+        typography_by_page = _build_typography_plans(
+            parsed=parsed,
+            architecture_by_page=_load_architecture_scoring_context(out),
+            camera_by_page=camera_by_page,
+            age_band=str(lock.get("editorial", {}).get("age_band", "6-8")),
+        )
+        for page in parsed.get("pages", []):
+            if isinstance(page, dict):
+                payload = typography_by_page.get(int(page.get("page_number", 0) or 0))
+                if payload:
+                    page["typography_plan"] = payload
         _studio_debug("studio start: building prompts")
         turn_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("page_turn_map", []) if isinstance(x, dict)}
         artifact_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("resolved_artifacts_map", []) if isinstance(x, dict)}
@@ -1101,7 +1151,7 @@ class BookforgePipeline:
         )[:5]
         cache_bools = [hit for arr in cache_hits.values() for hit in arr]
         cache_hit_rate = (sum(1 for x in cache_bools if x) / len(cache_bools)) if cache_bools else 0.0
-        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "applied_page_architecture": applied_arch_review}
+        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "applied_page_architecture": applied_arch_review}
         write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
         _studio_debug("running premium visual QC")
@@ -1150,8 +1200,22 @@ class BookforgePipeline:
             qa_attempts=qa_attempts,
             premium_qc=premium_qc,
             camera_sequence_plan=camera_by_page,
+            typography_rows=[
+                {
+                    "page": int(p.get("page_number", 0) or 0),
+                    "style_roles": (p.get("typography_plan", {}) or {}).get("style_roles", []),
+                    "typography_score": (p.get("typography_plan", {}) or {}).get("typography_score", {}),
+                    "render_fallback": bool(next((row.get("typography_render_fallback") for row in applied_arch_review if int(row.get("page", 0) or 0) == int(p.get("page_number", 0) or 0)), False)),
+                }
+                for p in parsed.get("pages", [])
+                if isinstance(p, dict)
+            ],
         )
         write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
+        (review / "typography_report.json").write_text(
+            json.dumps((sequence_report.to_dict().get("typography_sequence", {}) if hasattr(sequence_report, "to_dict") else {}), indent=2),
+            encoding="utf-8",
+        )
 
         reselection_enabled = _feature_flag("BOOKFORGE_RESELECTION", "false")
         before_sequence_score = float(sequence_report.overall_sequence_score)
@@ -1185,9 +1249,20 @@ class BookforgePipeline:
                     qa_attempts=qa_attempts,
                     premium_qc=premium_qc,
                     camera_sequence_plan=camera_by_page,
+                    typography_rows=[
+                        {
+                            "page": int(p.get("page_number", 0) or 0),
+                            "style_roles": (p.get("typography_plan", {}) or {}).get("style_roles", []),
+                            "typography_score": (p.get("typography_plan", {}) or {}).get("typography_score", {}),
+                            "render_fallback": bool(next((row.get("typography_render_fallback") for row in applied_arch_review if int(row.get("page", 0) or 0) == int(p.get("page_number", 0) or 0)), False)),
+                        }
+                        for p in parsed.get("pages", [])
+                        if isinstance(p, dict)
+                    ],
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
+                (review / "typography_report.json").write_text(json.dumps(sequence_report.to_dict().get("typography_sequence", {}), indent=2), encoding="utf-8")
                 reselection_report = with_reselection_sequence_improvement(
                     reselection_report,
                     before_score=before_sequence_score,
@@ -1320,9 +1395,20 @@ class BookforgePipeline:
                     qa_attempts=qa_attempts,
                     premium_qc=premium_qc,
                     camera_sequence_plan=camera_by_page,
+                    typography_rows=[
+                        {
+                            "page": int(p.get("page_number", 0) or 0),
+                            "style_roles": (p.get("typography_plan", {}) or {}).get("style_roles", []),
+                            "typography_score": (p.get("typography_plan", {}) or {}).get("typography_score", {}),
+                            "render_fallback": bool(next((row.get("typography_render_fallback") for row in applied_arch_review if int(row.get("page", 0) or 0) == int(p.get("page_number", 0) or 0)), False)),
+                        }
+                        for p in parsed.get("pages", [])
+                        if isinstance(p, dict)
+                    ],
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
+                (review / "typography_report.json").write_text(json.dumps(sequence_report.to_dict().get("typography_sequence", {}), indent=2), encoding="utf-8")
                 targeted_report = with_targeted_regeneration_sequence_improvement(
                     targeted_report,
                     before_score=targeted_before_sequence_score,
@@ -1378,6 +1464,7 @@ class BookforgePipeline:
             "review/qa_report.json",
             "review/visual_critic_report.json",
             "review/book_sequence_report.json",
+            "review/typography_report.json",
             "review/reselection_report.json",
             "review/targeted_regeneration_report.json",
             "review/report.html",
