@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from bookforge.qc.composition_qc import focus_bleed_overlap
+from bookforge.qc.gpu_batch_scoring import gpu_batch_scoring_enabled, score_candidate_batch
 from bookforge.qc.image_qc import contrast, entropy, sharpness, style_hist_similarity
 from bookforge.qc.print_qc import analyze_print_qc
 from bookforge.qc.visual_integrity import face_like_regions
@@ -46,6 +47,7 @@ def run_premium_visual_qc(
         "detail_density": 0.45,
         "story_alignment": 0.65,
     }
+    batch_scores = score_candidate_batch(selected_pages) if gpu_batch_scoring_enabled() else {}
 
     for idx, path in enumerate(selected_pages, start=1):
         st = style_hist_similarity(path, style_ref) if style_ref and style_ref.exists() else 1.0
@@ -54,6 +56,7 @@ def run_premium_visual_qc(
         sharp = sharpness(path)
         ent = entropy(path)
         cont = contrast(path)
+        gpu = batch_scores.get(str(path), {})
         faces = face_like_regions(path)
         note = note_map.get(idx, "")
         required_hidden = pvc.get("required_hidden_details", {}).get(str(idx), [])
@@ -63,9 +66,15 @@ def run_premium_visual_qc(
         typography_collision = comp["overlap"]
 
         composition_score = max(0.0, 1.0 - float(comp["overlap"]))
+        if gpu:
+            composition_score = max(composition_score, float(gpu.get("composition_score", composition_score)))
         character_consistency_score = float(st)
         texture_quality = max(0.0, min(1.0, (float(cont) / 80.0) * 0.4 + (1.0 - float(pr.get("out_of_gamut_risk", 0.0))) * 0.6))
+        if gpu:
+            texture_quality = max(texture_quality, float(gpu.get("texture_density", texture_quality)))
         detail_density = detail_richness
+        if gpu:
+            detail_density = max(detail_density, float(gpu.get("detail_density", detail_density)))
         story_alignment = 0.9 if note else 0.65
 
         continuity = _continuity_expectations(note)
@@ -124,6 +133,7 @@ def run_premium_visual_qc(
                 "contrast": cont,
                 "detail_richness": detail_richness,
                 "cheap_ai_risk": cheap_ai_risk,
+                "gpu_batch": gpu,
                 **pr,
             },
             "remediation_advice": [

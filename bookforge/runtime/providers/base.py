@@ -49,3 +49,7 @@ class RuntimeProvider(ABC):
     @abstractmethod
     def instance_status(self, *, instance_id: str) -> Dict[str, Any]:
         raise NotImplementedError
+
+    def wait_until_running(self, *, instance_id: str, timeout_s: int = 600, poll_interval_s: int = 5) -> Dict[str, Any]:
+        """Optional provider hook to block until an instance is running."""
+        raise NotImplementedError(f"{self.name} does not implement wait_until_running")

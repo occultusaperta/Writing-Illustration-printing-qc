@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from bookforge.qc.composition_qc import focus_bleed_overlap
+from bookforge.qc.gpu_batch_scoring import gpu_batch_scoring_enabled, score_candidate_batch
 from bookforge.qc.print_qc import analyze_print_qc, print_qc_warnings
 from bookforge.qc.visual_integrity import (
     border_artifact_score,
@@ -128,7 +129,16 @@ def _variant_report(path: Path, qa_config: Dict[str, Any], style_ref: Path | Non
 
 
 def choose_best_variant(paths: List[Path], qa_config: Dict[str, Any], style_ref: Path | None, prev_ref: Path | None) -> Tuple[Path, Dict[str, Any]]:
+    batch_scores: Dict[str, Dict[str, float]] = {}
+    if gpu_batch_scoring_enabled():
+        batch_scores = score_candidate_batch(paths)
+
     reports = [_variant_report(p, qa_config, style_ref, prev_ref) for p in paths]
+    for report in reports:
+        gpu = batch_scores.get(report["path"])
+        if gpu:
+            report["gpu_batch_scores"] = gpu
+
     scored = sorted(
         reports,
         key=lambda r: (
@@ -136,6 +146,7 @@ def choose_best_variant(paths: List[Path], qa_config: Dict[str, Any], style_ref:
             -4.0 * r["text_likelihood"] - 4.0 * r["watermark_likelihood"] - 3.0 * r["logo_likelihood"] - 3.0 * r["border_artifact_score"],
             r["style_hist_similarity"] - r["page_to_page_hist_drift"] - 0.6 * r.get("color_drift_vs_style", 0.0),
             r["sharpness"] + r["contrast"] + r["entropy"] - 0.2 * max(0.0, 100 - r.get("brightness_p95", 100)) - 5.0 * r.get("out_of_gamut_risk", 0.0),
+            (r.get("gpu_batch_scores") or {}).get("ranking_score", 0.0),
         ),
         reverse=True,
     )
