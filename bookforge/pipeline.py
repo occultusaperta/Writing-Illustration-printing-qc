@@ -30,6 +30,8 @@ from bookforge.editorial.readaloud_script import generate_readaloud_script
 from bookforge.editorial.report import render_editorial_report_md
 from bookforge.editorial.rhythm_audit import audit_rhythm_and_rhyme
 from bookforge.editorial.trade_dress import generate_trade_dress
+from bookforge.color_script import plan_color_script, write_planning_artifacts as write_color_planning_artifacts
+from bookforge.page_architecture import plan_architecture_sequence, write_planning_artifacts as write_arch_planning_artifacts
 from bookforge.profiles import apply_profile, load_profile
 from bookforge.qc.image_qc import choose_best_variant, write_qa_report
 from bookforge.qc.kdp_preflight import KDPPreflight
@@ -197,6 +199,12 @@ def _fal_key_from_env() -> str:
     return (os.getenv("FAL_KEY") or os.getenv("Fal_key") or os.getenv("fal_key") or "").strip()
 
 
+def _feature_flag(name: str, default: str = "true") -> bool:
+    import os
+
+    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
 
 
 class BookforgePipeline:
@@ -260,6 +268,19 @@ class BookforgePipeline:
             (folder / "negative_prompt.txt").write_text(variant["locked_negative_prompt"], encoding="utf-8")
 
         (preprod / "layout_options.json").write_text(json.dumps(presets_payload(), indent=2), encoding="utf-8")
+
+        planning_dir = preprod / "planning"
+        if _feature_flag("BOOKFORGE_COLOR_SCRIPT", default="true"):
+            analyses, master_palette, page_specs, transitions = plan_color_script(parsed.get("pages", []))
+            write_color_planning_artifacts(planning_dir, analyses, master_palette, page_specs, transitions)
+        if _feature_flag("BOOKFORGE_PAGE_ARCHITECTURE", default="true"):
+            source_pages = []
+            if (planning_dir / "emotion_analysis.json").exists():
+                source_pages = json.loads((planning_dir / "emotion_analysis.json").read_text(encoding="utf-8"))
+            else:
+                source_pages = [{"page_number": p.get("page_number", i + 1), "narrative_function": "rising_action"} for i, p in enumerate(parsed.get("pages", []))]
+            architecture_plan, architecture_report = plan_architecture_sequence(source_pages, genre="picture_book")
+            write_arch_planning_artifacts(planning_dir, architecture_plan, architecture_report)
 
         trim_w, trim_h = parse_trim_size(size)
         req_w = int((trim_w + 2 * self.bleed_in) * 300)
