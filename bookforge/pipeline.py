@@ -44,6 +44,7 @@ from bookforge.qc.premium_visual_qc import run_premium_visual_qc
 from bookforge.review.contact_sheet import generate_contact_sheet
 from bookforge.review.html_report import generate_report as generate_html_report
 from bookforge.review.proof_pack import generate_proof_pack, write_production_report
+from bookforge.review.book_sequence import build_book_sequence_report, write_book_sequence_report
 from bookforge.story.back_matter import generate_blurb_options
 from bookforge.story.prompt_compiler import compile_prompt, tighten_prompt
 from bookforge.story.story_spec import build_bible_variants, parse_story
@@ -1088,6 +1089,16 @@ class BookforgePipeline:
             ),
             encoding="utf-8",
         )
+        color_script_payload = _load_json_if_exists(out / "preprod" / "planning" / "color_script.json")
+        sequence_report = build_book_sequence_report(
+            page_count=len(parsed.get("pages", [])),
+            color_script=color_script_payload if isinstance(color_script_payload, dict) else None,
+            architecture_plan=architecture_plan,
+            applied_arch_rows=applied_arch_review,
+            qa_attempts=qa_attempts,
+            premium_qc=premium_qc,
+        )
+        write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
         preprod_editorial = out / "preprod" / "editorial"
         _copy_companion_to_review(out)
         if preprod_editorial.exists():
@@ -1128,6 +1139,7 @@ class BookforgePipeline:
             "review/production_report.json",
             "review/qa_report.json",
             "review/visual_critic_report.json",
+            "review/book_sequence_report.json",
             "review/report.html",
         ]
 
@@ -1182,6 +1194,20 @@ class BookforgePipeline:
 
         if not (review_dir / "editorial_report.md").exists():
             warnings.append("Missing review/editorial_report.md")
+        sequence_report_path = review_dir / "book_sequence_report.json"
+        if sequence_report_path.exists():
+            seq = json.loads(sequence_report_path.read_text(encoding="utf-8"))
+            for field in [
+                "overall_sequence_score",
+                "color_flow_summary_score",
+                "architecture_flow_summary_score",
+                "energy_curve_summary_score",
+                "weak_clusters",
+            ]:
+                if field not in seq:
+                    failures.append(f"book_sequence_report.json missing {field}")
+        else:
+            warnings.append("Missing review/book_sequence_report.json")
         companion_dir = review_dir / "companion"
         story_parsed_path = out / "preprod" / "story_parsed.json"
         expects_companion = False
