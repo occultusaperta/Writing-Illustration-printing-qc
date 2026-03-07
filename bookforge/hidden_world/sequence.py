@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from bookforge.hidden_world.types import HiddenWorldSequenceFinding
+from bookforge.utils import clamp01
 
 
 def _run_ranges(pages: List[int], min_len: int = 2) -> List[str]:
@@ -95,7 +96,7 @@ def build_hidden_world_sequence_finding(
     dominant_runs = _run_ranges(too_dominant_pages)
 
     penalties = 0.09 * len(weak_runs) + 0.07 * len(too_dominant_pages) + 0.07 * len(too_invisible_pages) + 0.06 * len(warnings)
-    summary_score = max(0.0, min(1.0, 1.0 - penalties))
+    summary_score = clamp01(1.0 - penalties)
 
     return HiddenWorldSequenceFinding(
         summary_score=round(summary_score, 4),
