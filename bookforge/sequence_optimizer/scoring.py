@@ -17,7 +17,8 @@ def local_score_bundle(candidate: Dict[str, Any]) -> Dict[str, float]:
     hidden_world = float(((meta.get("hidden_world_score") or {}).get("composite_score", 0.5)) or 0.5)
     character = float(((meta.get("character_commercial_score") or {}).get("composite_score", 0.5)) or 0.5)
     typography_proxy = clamp01(1.0 - float(candidate.get("focus_bleed_overlap", 0.15) or 0.15))
-    composite = clamp01(0.22 * color + 0.2 * ensemble + 0.18 * architecture + 0.12 * saliency + 0.1 * shot + 0.08 * hidden_world + 0.07 * character + 0.03 * typography_proxy)
+    dual_audience = float(((meta.get("dual_audience_score") or {}).get("composite_score", 0.5)) or 0.5)
+    composite = clamp01(0.2 * color + 0.18 * ensemble + 0.16 * architecture + 0.11 * saliency + 0.09 * shot + 0.08 * hidden_world + 0.07 * character + 0.03 * typography_proxy + 0.08 * dual_audience)
     return {
         "color": color,
         "architecture": architecture,
@@ -27,6 +28,7 @@ def local_score_bundle(candidate: Dict[str, Any]) -> Dict[str, float]:
         "hidden_world": hidden_world,
         "character": character,
         "ensemble": ensemble,
+        "dual_audience": dual_audience,
         "local_composite": round(composite, 6),
     }
 
@@ -45,6 +47,7 @@ def sequence_summary_from_report(sequence_report: Dict[str, Any] | None) -> Dict
             "character_consistency_score": 0.0,
             "layout_search_support_score": 0.0,
             "weak_cluster_reduction_score": 0.0,
+            "dual_audience_balance_score": 0.0,
         }
     saliency = float(((sequence_report.get("saliency_flow_sequence") or {}).get("summary_score", 0.0)) or 0.0)
     typography = float(((sequence_report.get("typography_sequence") or {}).get("summary_score", 0.0)) or 0.0)
@@ -53,6 +56,7 @@ def sequence_summary_from_report(sequence_report: Dict[str, Any] | None) -> Dict
     character = float(((sequence_report.get("character_commercial_summary") or {}).get("summary_score", 0.0)) or 0.0)
     layout = float(((sequence_report.get("layout_search_summary") or {}).get("summary_score", 0.0)) or 0.0)
     weak = float(max(0.0, 1.0 - 0.15 * len(sequence_report.get("weak_clusters", []))))
+    dual_summary = (sequence_report.get("dual_audience_summary") or {}) if isinstance(sequence_report.get("dual_audience_summary"), dict) else {}
     return {
         "overall": float(sequence_report.get("overall_sequence_score", 0.0) or 0.0),
         "color_flow_score": float(sequence_report.get("color_flow_summary_score", 0.0) or 0.0),
@@ -65,6 +69,7 @@ def sequence_summary_from_report(sequence_report: Dict[str, Any] | None) -> Dict
         "character_consistency_score": character,
         "layout_search_support_score": layout,
         "weak_cluster_reduction_score": weak,
+        "dual_audience_balance_score": float(dual_summary.get("summary_score", 0.0) or 0.0),
     }
 
 
@@ -117,6 +122,7 @@ def move_component_deltas(
     hidden_delta = after["hidden_world"] - before["hidden_world"]
     character_delta = after["character"] - before["character"]
     layout_delta = 0.5 * ((after["architecture"] + after["saliency"]) - (before["architecture"] + before["saliency"]))
+    dual_delta = after["dual_audience"] - before["dual_audience"]
     weak_delta = max(0.0, after["local_composite"] - before["local_composite"]) if page_is_weak_cluster(page, sequence_report) else 0.0
     storefront_delta = (after["ensemble"] - before["ensemble"]) if opening else 0.0
     if climax:
@@ -137,6 +143,7 @@ def move_component_deltas(
         "character_consistency_score": round(character_delta, 6),
         "layout_search_support_score": round(layout_delta, 6),
         "weak_cluster_reduction_score": round(weak_delta, 6),
+        "dual_audience_balance_score": round(dual_delta, 6),
         "local_composite": round(after["local_composite"] - before["local_composite"], 6),
     }
 
@@ -152,6 +159,7 @@ def composite_delta(deltas: Dict[str, float]) -> float:
         "storefront_opening_score": 0.07,
         "character_consistency_score": 0.08,
         "layout_search_support_score": 0.08,
-        "weak_cluster_reduction_score": 0.13,
+        "weak_cluster_reduction_score": 0.12,
+        "dual_audience_balance_score": 0.08,
     }
     return round(sum(float(deltas.get(k, 0.0) or 0.0) * w for k, w in weights.items()), 6)
