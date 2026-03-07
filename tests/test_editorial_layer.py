@@ -144,9 +144,23 @@ def test_verify_warns_not_fails_when_editorial_missing(tmp_path: Path):
             if path.name == "preflight_report.json":
                 payload = {"status": "PASS"}
             elif path.name == "book_sequence_report.json":
-                payload = {"overall_sequence_score": 0.9, "color_flow_summary_score": 0.9, "architecture_flow_summary_score": 0.9, "energy_curve_summary_score": 0.9, "weak_clusters": []}
-            else:
+                payload = {"overall_sequence_score": 0.9, "color_flow_summary_score": 0.9, "architecture_flow_summary_score": 0.9, "energy_curve_summary_score": 0.9, "weak_clusters": [], "saliency_flow_sequence": {}}
+            elif path.name == "layout_search_report.json":
+                payload = {"summary": {}, "pages": []}
+            elif path.name == "production_report.json":
                 payload = {"post": {"crop_mode": "smart", "director_grade_enabled": True, "tone_curve_preset": "storybook_lux"}, "qa_thresholds": {}, "cache_hit_rate": 1.0}
+            elif path.name == "reselection_report.json":
+                payload = {"config": {}, "considered_pages": [], "eligible_pages": [], "replaced_pages": [], "decisions": [], "sequence_improvement": {}}
+            elif path.name == "targeted_regeneration_report.json":
+                payload = {"enabled": False, "config": {}, "eligible_targets": [], "decisions": [], "sequence_improvement": {}}
+            elif path.name == "storefront_optimization_report.json":
+                payload = {"enabled": True, "look_inside": {}, "first_pages_strength_score": 0.5, "summary_score": 0.5, "limitations": []}
+            elif path.name == "hidden_world_report.json":
+                payload = {"summary_score": 0.5, "warnings": []}
+            elif path.name == "character_commercial_report.json":
+                payload = {"enabled": True, "summary_score": 0.5, "lead_character_strength_summary": "Moderate", "weakest_pages": [], "strongest_pages": [], "limitations": []}
+            else:
+                payload = {}
             path.write_text(json.dumps(payload), encoding="utf-8")
         else:
             path.write_bytes(b"x")

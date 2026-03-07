@@ -123,6 +123,8 @@ def test_verify_checks_character_commercial_artifact(tmp_path):
                 payload = {"summary_score": 0.5, "warnings": []}
             elif f.name == "character_commercial_report.json":
                 payload = {"enabled": True, "summary_score": 0.5, "lead_character_strength_summary": "Moderate", "weakest_pages": [], "strongest_pages": [], "limitations": []}
+            elif f.name == "layout_search_report.json":
+                payload = {"summary": {}, "pages": []}
             else:
                 payload = {}
             f.write_text(json.dumps(payload), encoding="utf-8")

@@ -94,6 +94,7 @@ class BookSequenceReport:
     typography_sequence: TypographySequenceFinding
     hidden_world_sequence: HiddenWorldSequenceFinding
     character_commercial_summary: Dict[str, Any]
+    layout_search_summary: Dict[str, Any]
     per_page_notes: List[Dict[str, Any]]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -516,6 +517,7 @@ def build_book_sequence_report(
     typography_rows: List[Dict[str, Any]] | None = None,
     hidden_world_plan: Dict[str, Any] | None = None,
     character_commercial_report: Dict[str, Any] | None = None,
+    layout_search_report: Dict[str, Any] | None = None,
 ) -> BookSequenceReport:
     color_script = color_script if isinstance(color_script, dict) else {}
     architecture_plan = architecture_plan if isinstance(architecture_plan, list) else []
@@ -526,6 +528,7 @@ def build_book_sequence_report(
     typography_rows = typography_rows if isinstance(typography_rows, list) else []
     hidden_world_plan = hidden_world_plan if isinstance(hidden_world_plan, dict) else {}
     character_commercial_report = character_commercial_report if isinstance(character_commercial_report, dict) else {}
+    layout_search_report = layout_search_report if isinstance(layout_search_report, dict) else {}
 
     qa_by_page = _series_from_qa_attempts(qa_attempts, page_count)
     color_pages = {
@@ -566,6 +569,8 @@ def build_book_sequence_report(
         warnings.append("Hidden-world planning artifacts absent; rereadability diagnostics are limited.")
     if not character_commercial_report:
         warnings.append("Character commercial report absent; protagonist brandability diagnostics are limited.")
+    if not layout_search_report:
+        warnings.append("Layout search report absent; local layout exploration diagnostics are limited.")
 
     summary_notes.extend(color_warnings)
     summary_notes.extend(architecture_flow.repeated_pattern_warnings[:2])
@@ -575,6 +580,7 @@ def build_book_sequence_report(
     summary_notes.extend(typography_sequence.sequence_notes[:1])
     summary_notes.extend(hidden_world_sequence.positive_rereadability_highlights[:1])
     summary_notes.extend([str(n) for n in character_commercial_report.get("warnings", [])[:1]])
+    summary_notes.extend([str(n) for n in (layout_search_report.get("summary", {}) or {}).get("notes", [])[:1]])
     if not summary_notes:
         summary_notes.append("Sequence diagnostics completed with no major warnings.")
 
@@ -599,6 +605,7 @@ def build_book_sequence_report(
                 "saliency_flow_score": float(((qa_by_page.get(p, {}).get("metadata", {}) or {}).get("saliency_flow_score", {}) or {}).get("composite_score", 0.0) or 0.0),
                 "typography_composite_score": float(next(((row.get("typography_score", {}) or {}).get("composite_score", 0.0) for row in typography_rows if _safe_page_int(row.get("page")) == p), 0.0) or 0.0),
                 "hidden_world_composite_score": float(((qa_by_page.get(p, {}).get("metadata", {}) or {}).get("hidden_world_score", {}) or {}).get("composite_score", 0.0) or 0.0),
+                "layout_search_top_score": float(next((row.get("top_score", 0.0) for row in (layout_search_report.get("pages", []) if isinstance(layout_search_report.get("pages", []), list) else []) if p in (row.get("page_numbers", []) or [])), 0.0) or 0.0),
             }
         )
 
@@ -625,6 +632,13 @@ def build_book_sequence_report(
             "lead_character_strength_summary": str(character_commercial_report.get("lead_character_strength_summary", "")),
             "warnings": list(character_commercial_report.get("warnings", []) or []),
             "positive_notes": list(character_commercial_report.get("positive_notes", []) or []),
+        },
+        layout_search_summary={
+            "status": str(layout_search_report.get("status", "MISSING")),
+            "entries": int((layout_search_report.get("summary", {}) or {}).get("entries", 0) or 0),
+            "mean_top_score": float((layout_search_report.get("summary", {}) or {}).get("mean_top_score", 0.0) or 0.0),
+            "total_rejected": int((layout_search_report.get("summary", {}) or {}).get("total_rejected", 0) or 0),
+            "sequence_notes": list(layout_search_report.get("sequence_notes", []) or []),
         },
         per_page_notes=per_page_notes,
     )

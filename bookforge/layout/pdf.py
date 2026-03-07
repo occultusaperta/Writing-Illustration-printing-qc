@@ -417,6 +417,9 @@ class PDFLayoutEngine:
                     "typography_overlay_count": int(typography_render_meta.get("overlay_count", 0) or 0),
                     "typography_render_fallback": bool(typography_render_meta.get("fallback_used", False)),
                     "typography_style_roles": typography_render_meta.get("style_roles", []),
+                    "layout_search_chosen_permutation_id": str(((arch.get("layout_search", {}) or {}).get("chosen_permutation_id", "")) if isinstance(arch, dict) else ""),
+                    "layout_search_top_score": float(((arch.get("layout_search", {}) or {}).get("top_score", 0.0)) if isinstance(arch, dict) else 0.0),
+                    "layout_search_scope": str(arch.get("layout_search_scope", "")) if isinstance(arch, dict) else "",
                 }
             )
             c.showPage()
