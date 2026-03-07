@@ -13,6 +13,8 @@ from PIL import Image, ImageDraw
 
 from bookforge.illustration.color_grade import add_sharpen_and_grain, grade_image
 from bookforge.illustration.director_grade import apply_director_grade
+from bookforge.illustration.luxury_finish import apply_canvas_grain, apply_microtexture_enhancement, apply_paint_variance
+from bookforge.illustration.upscale import upscale_image
 from bookforge.illustration.providers import OPENAI_DISABLED_MESSAGE, resolve_image_provider
 from bookforge.illustration.prompt_contract import build_prompt_contract
 from bookforge.illustration.visual_lock import ensure_reference_paths_exist, normalize_visual_lock, validate_visual_lock
@@ -463,6 +465,8 @@ class BookforgePipeline:
             "approved_character": str(approved_character),
             "approved_style": str(approved_style),
             "approved_cover": str(approved_cover),
+            "approved_character_reference": str(approved_character),
+            "approved_style_reference": str(approved_style),
             "character_bible": json.loads((vv / "character_bible.json").read_text(encoding="utf-8")),
             "style_bible": json.loads((vv / "style_bible.json").read_text(encoding="utf-8")),
             "locked_prompt_prefix": (vv / "prompt_prefix.txt").read_text(encoding="utf-8"),
@@ -487,6 +491,7 @@ class BookforgePipeline:
                 "paper_texture_strength": float(approval.get("paper_texture_strength", 0.08)),
                 "paper_texture_scale": float(approval.get("paper_texture_scale", 1.0)),
                 "global_grade_strength": float(approval.get("global_grade_strength", 0.30)),
+                "upscale_after_approval": approval.get("upscale_after_approval", "disabled"),
                 "premium_finish_hooks": {
                     "texture_enhancement": approval.get("texture_enhancement", "enabled"),
                     "microcontrast_enhancement": approval.get("microcontrast_enhancement", "enabled"),
@@ -590,6 +595,9 @@ class BookforgePipeline:
         )
         grain_seed = int(lock.get("seeds", {}).get("base_seed", 0)) + int(page_no) * 997
         final = add_sharpen_and_grain(graded, sharpen_amount=sharpen, grain_amount=grain, grain_seed=grain_seed)
+        final = apply_microtexture_enhancement(final)
+        final = apply_canvas_grain(final)
+        final = apply_paint_variance(final)
         # premium finish hooks are additive; unavailable external stacks remain explicit no-op
         _hooks = post.get("premium_finish_hooks", {})
         _ = _hooks.get("optional_tiled_upscale_path", "unavailable_noop")
@@ -667,7 +675,15 @@ class BookforgePipeline:
             artifact = artifact_map.get(p["page_number"], {})
             addendum = _build_prompt_addendum(p, turn, artifact, bool(lock.get("editorial", {}).get("editorial_mode", True)))
             prompt = compile_prompt(lock, p["text"], sb, addendum=addendum)
-            prompts.append({"page_number": p["page_number"], "prompt": prompt, "illustration_notes": p.get("illustration_notes", ""), "required_hidden_details": p.get("required_hidden_details", [])})
+            prompts.append(
+                {
+                    "page_number": p["page_number"],
+                    "prompt": prompt,
+                    "illustration_notes": p.get("illustration_notes", ""),
+                    "required_hidden_details": p.get("required_hidden_details", []),
+                    "reference_images": [lock.get("approved_character_reference", lock.get("approved_character", "")), lock.get("approved_style_reference", lock.get("approved_style", ""))],
+                }
+            )
 
         prompt_contract = build_prompt_contract(parsed, lock, spread_pairs=lock.get("spreads", {}).get("pairs", []))
 
@@ -680,8 +696,8 @@ class BookforgePipeline:
                 out / "images" / "checkpoint_variants",
                 (req_w, req_h),
                 1,
-                Path(lock["approved_character"]),
-                Path(lock["approved_style"]),
+                Path(lock.get("approved_character_reference", lock["approved_character"])),
+                Path(lock.get("approved_style_reference", lock["approved_style"])),
                 None,
                 lock["fal"]["steps"],
             )
@@ -703,8 +719,8 @@ class BookforgePipeline:
             out / "images" / "variants_raw",
             (req_w, req_h),
             lock["fal"]["page_variants"],
-            Path(lock["approved_character"]),
-            Path(lock["approved_style"]),
+            Path(lock.get("approved_character_reference", lock["approved_character"])),
+            Path(lock.get("approved_style_reference", lock["approved_style"])),
             Path(lock["approved_style"]).with_name(f"palette_tile_v{lock['approved_variant']}.png"),
             lock["fal"]["steps"],
             seeds=page_seeds,
@@ -735,7 +751,7 @@ class BookforgePipeline:
                 rounds += 1
                 needs_forced_regen = False
                 hard_prompt = tighten_prompt(hard_prompt, ["anatomy", "artifact", "text"])
-                regen = ill.generate_page_variants([{"page_number": no, "prompt": hard_prompt}], out / "images" / "variants_raw", (req_w, req_h), lock["fal"]["page_variants"], Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"], seeds={no: page_seeds.get(no, 0) + rounds * 1000}, cache_dir=out / "cache")
+                regen = ill.generate_page_variants([{"page_number": no, "prompt": hard_prompt}], out / "images" / "variants_raw", (req_w, req_h), lock["fal"]["page_variants"], Path(lock.get("approved_character_reference", lock["approved_character"])), Path(lock.get("approved_style_reference", lock["approved_style"])), None, lock["fal"]["steps"], seeds={no: page_seeds.get(no, 0) + rounds * 1000}, cache_dir=out / "cache")
                 regen_raw = _order_variants([Path(p) for p in regen["variants"][no]], variant_pref.get(no))
                 regen_variants = []
                 for raw_path in regen_raw:
@@ -768,6 +784,13 @@ class BookforgePipeline:
             prev_ref = dst
 
         spread_pairs = _parse_spread_pairs(lock.get("spreads", {}), page_count)
+
+        upscale_setting = str(lock.get("post", {}).get("upscale_after_approval", "disabled")).strip().lower()
+        if upscale_setting in {"enabled", "true", "1", "yes", "on"}:
+            upscaled_selected: List[str] = []
+            for src in selected:
+                upscaled_selected.append(str(upscale_image(Path(src))))
+            selected = upscaled_selected
         for a, b in spread_pairs:
             spread_prompt = prompts[a - 1]["prompt"] + " panoramic double-page spread"
             spread_ok = False
@@ -775,7 +798,7 @@ class BookforgePipeline:
             spread_path: Path | None = None
             while not spread_ok and spread_round <= lock["qa"]["max_regen_rounds"]:
                 spread_round += 1
-                spread = ill.generate_page_variants([{"page_number": a, "prompt": spread_prompt}], out / "images" / "variants_raw", (req_w * 2, req_h), 1, Path(lock["approved_character"]), Path(lock["approved_style"]), None, lock["fal"]["steps"], seeds={a: page_seeds.get(a, 0)}, cache_dir=out / "cache")
+                spread = ill.generate_page_variants([{"page_number": a, "prompt": spread_prompt}], out / "images" / "variants_raw", (req_w * 2, req_h), 1, Path(lock.get("approved_character_reference", lock["approved_character"])), Path(lock.get("approved_style_reference", lock["approved_style"])), None, lock["fal"]["steps"], seeds={a: page_seeds.get(a, 0)}, cache_dir=out / "cache")
                 spread_path = Path(spread["variants"][a][0])
                 spread_graded = out / "images" / "variants" / spread_path.name
                 self._postprocess_variant(spread_path, spread_graded, Path(lock["approved_style"]), lock, a)
@@ -843,6 +866,26 @@ class BookforgePipeline:
             "premium_visual_qc": premium_qc,
         }
         write_qa_report(review / "qa_report.json", qa_payload)
+        (review / "visual_critic_report.json").write_text(
+            json.dumps(
+                {
+                    "status": premium_qc.get("status"),
+                    "thresholds": premium_qc.get("visual_critic_thresholds", {}),
+                    "pages": [
+                        {
+                            "page": row.get("page"),
+                            "scores": row.get("visual_critic_scores", {}),
+                            "failures": row.get("visual_critic_failures", []),
+                            "continuity": row.get("continuity", {}),
+                            "continuity_warnings": row.get("continuity_warnings", []),
+                        }
+                        for row in premium_qc.get("pages", [])
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         preprod_editorial = out / "preprod" / "editorial"
         _copy_companion_to_review(out)
         if preprod_editorial.exists():
@@ -881,6 +924,7 @@ class BookforgePipeline:
             "review/proof_pack.pdf",
             "review/production_report.json",
             "review/qa_report.json",
+            "review/visual_critic_report.json",
             "review/report.html",
         ]
 

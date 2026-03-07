@@ -22,6 +22,7 @@ class ImageProvider(Protocol):
         steps: int = 4,
         seeds: Dict[int, int] | None = None,
         cache_dir: Path | None = None,
+        reference_images: List[Path] | None = None,
     ) -> Dict[str, Any]:
         ...
 

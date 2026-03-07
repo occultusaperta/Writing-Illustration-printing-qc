@@ -59,6 +59,7 @@ class FluxLocalImageProvider:
         steps: int = 4,
         seeds: Dict[int, int] | None = None,
         cache_dir: Path | None = None,
+        reference_images: List[Path] | None = None,
     ) -> Dict[str, Any]:
         variants_dir.mkdir(parents=True, exist_ok=True)
         results: Dict[int, List[str]] = {}
@@ -74,9 +75,14 @@ class FluxLocalImageProvider:
             page_keys: List[str] = []
             page_prov: List[Dict[str, Any]] = []
             composite_ref = None
+            page_reference_images = [Path(x) for x in entry.get("reference_images", []) if str(x)]
+            all_refs = [p for p in (reference_images or []) + page_reference_images if p and Path(p).exists()]
             if reference_image and style_image and reference_image.exists() and style_image.exists():
                 composite_ref = variants_dir / f"_composite_ref_{page_no:03d}.png"
                 self.build_composite_reference(reference_image, style_image, composite_ref, palette_tile)
+            elif len(all_refs) >= 2:
+                composite_ref = variants_dir / f"_composite_ref_{page_no:03d}.png"
+                self.build_composite_reference(Path(all_refs[0]), Path(all_refs[1]), composite_ref, palette_tile)
             for idx in range(1, variants + 1):
                 seed = (page_seed + idx - 1) if page_seed is not None else None
                 payload = FluxGenerateRequest(
@@ -88,8 +94,14 @@ class FluxLocalImageProvider:
                     quality_preset=str(os.getenv("BOOKFORGE_FLUX_QUALITY", "draft")),
                     model_name=os.getenv("BOOKFORGE_FLUX_MODEL"),
                 ).to_payload()
-                if composite_ref or reference_image:
-                    payload["references"] = [str(composite_ref or reference_image)]
+                refs_payload: List[str] = []
+                if composite_ref:
+                    refs_payload.append(str(composite_ref))
+                elif reference_image:
+                    refs_payload.append(str(reference_image))
+                refs_payload.extend([str(Path(r)) for r in all_refs])
+                if refs_payload:
+                    payload["references"] = refs_payload
                 key = cache_key_for_request(self.url, payload)
                 png, from_cache, prov = self._call_local_flux(payload)
                 out = variants_dir / f"page_{page_no:03d}_v{idx}.png"

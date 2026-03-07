@@ -86,6 +86,7 @@ class FalFluxIllustrator:
         steps: int = 4,
         seeds: Dict[int, int] | None = None,
         cache_dir: Path | None = None,
+        reference_images: List[Path] | None = None,
     ) -> Dict[str, Any]:
         fal_key = (os.getenv("FAL_KEY") or os.getenv("Fal_key") or os.getenv("fal_key") or "").strip()
         if not fal_key:
@@ -100,9 +101,14 @@ class FalFluxIllustrator:
             prompt = entry["prompt"]
             generated: List[str] = []
             composite_ref = None
+            page_reference_images = [Path(x) for x in entry.get("reference_images", []) if str(x)]
+            all_refs = [Path(p) for p in (reference_images or []) + page_reference_images if p and Path(p).exists()]
             if reference_image and style_image and reference_image.exists() and style_image.exists():
                 composite_ref = variants_dir / f"_composite_ref_{page_no:03d}.png"
                 self.build_composite_reference(reference_image, style_image, composite_ref, palette_tile)
+            elif len(all_refs) >= 2:
+                composite_ref = variants_dir / f"_composite_ref_{page_no:03d}.png"
+                self.build_composite_reference(all_refs[0], all_refs[1], composite_ref, palette_tile)
             page_seed = int((seeds or {}).get(page_no, 0)) if seeds else None
             page_hits: List[bool] = []
             page_keys: List[str] = []
