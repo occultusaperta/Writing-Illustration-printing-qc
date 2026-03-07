@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from PIL import Image
-from bookforge.utils import clamp01
+from bookforge.utils import clamp01, PREMIUM_QC_WEAK_THRESHOLD, COLOR_TRANSITION_WEAK_THRESHOLD, SEVERE_COLOR_THRESHOLD, SEVERE_ENSEMBLE_THRESHOLD, SEVERE_ARCHITECTURE_THRESHOLD, SEVERE_SALIENCY_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -110,10 +110,10 @@ def _sequence_flagged_pages(sequence_report: Dict[str, Any]) -> set[int]:
         page = int(row.get("page", 0) or 0)
         if page <= 0:
             continue
-        if float(row.get("premium_qc_score", 1.0) or 1.0) < 0.78:
+        if float(row.get("premium_qc_score", 1.0) or 1.0) < PREMIUM_QC_WEAK_THRESHOLD:
             flagged.add(page)
         cscore = row.get("color_transition_to_page_score")
-        if cscore is not None and float(cscore) < 0.72:
+        if cscore is not None and float(cscore) < COLOR_TRANSITION_WEAK_THRESHOLD:
             flagged.add(page)
     return flagged
 
@@ -124,7 +124,7 @@ def _severe_local_issue(candidate: Dict[str, Any]) -> bool:
     ensemble = float(((metadata.get("visual_ensemble") or {}).get("ensemble_score", 1.0)) or 1.0)
     arch = float(((metadata.get("page_architecture_score") or {}).get("composite_score", 1.0)) or 1.0)
     saliency = float(((metadata.get("saliency_flow_score") or {}).get("composite_score", 1.0)) or 1.0)
-    return color < 0.68 or ensemble < 0.7 or arch < 0.65 or saliency < 0.45
+    return color < SEVERE_COLOR_THRESHOLD or ensemble < SEVERE_ENSEMBLE_THRESHOLD or arch < SEVERE_ARCHITECTURE_THRESHOLD or saliency < SEVERE_SALIENCY_THRESHOLD
 
 
 def _candidate_pool_by_page(qa_attempts: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:

@@ -270,6 +270,7 @@ def choose_best_variant(
             r["style_hist_similarity"] - r["page_to_page_hist_drift"] - 0.6 * r.get("color_drift_vs_style", 0.0),
             r["sharpness"] + r["contrast"] + r["entropy"] - 0.2 * max(0.0, 100 - r.get("brightness_p95", 100)) - 5.0 * r.get("out_of_gamut_risk", 0.0),
             (r.get("gpu_batch_scores") or {}).get("ranking_score", 0.0),
+            ((r.get("metadata") or {}).get("visual_ensemble") or {}).get("ensemble_score", 0.0),
             ((r.get("metadata") or {}).get("page_architecture_score") or {}).get("composite_score", 0.0),
             0.15 * (((r.get("metadata") or {}).get("shot_adherence_score") or {}).get("composite_score", 0.0)),
             0.05 * (((r.get("metadata") or {}).get("saliency_flow_score") or {}).get("composite_score", 0.0)),
