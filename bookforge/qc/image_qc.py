@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 from PIL import Image
 
+from bookforge.page_architecture.scoring import score_architecture_variant
 from bookforge.qc.composition_qc import focus_bleed_overlap
 from bookforge.color_script.postprocess import apply_color_postprocess
 from bookforge.color_script.scoring import score_candidate_image_colors
@@ -139,6 +140,9 @@ def choose_best_variant(
     page_number: int | None = None,
     page_color_spec: Dict[str, Any] | None = None,
     master_palette: Dict[str, Any] | None = None,
+    page_text: str = "",
+    architecture_variant: Dict[str, Any] | None = None,
+    age_range: str | None = None,
 ) -> Tuple[Path, Dict[str, Any]]:
     batch_scores: Dict[str, Dict[str, float]] = {}
     if gpu_batch_scoring_enabled():
@@ -180,6 +184,15 @@ def choose_best_variant(
             },
             "ensemble_score": ensemble.ensemble_score,
         }
+        if architecture_variant:
+            arch_score = score_architecture_variant(
+                architecture_variant,
+                page_text=page_text,
+                image=Path(report["path"]),
+                page_color_spec=page_color_spec,
+                age_range=age_range,
+            )
+            metadata["page_architecture_score"] = arch_score.to_dict()
 
     scored = sorted(
         reports,
@@ -189,6 +202,7 @@ def choose_best_variant(
             r["style_hist_similarity"] - r["page_to_page_hist_drift"] - 0.6 * r.get("color_drift_vs_style", 0.0),
             r["sharpness"] + r["contrast"] + r["entropy"] - 0.2 * max(0.0, 100 - r.get("brightness_p95", 100)) - 5.0 * r.get("out_of_gamut_risk", 0.0),
             (r.get("gpu_batch_scores") or {}).get("ranking_score", 0.0),
+            ((r.get("metadata") or {}).get("page_architecture_score") or {}).get("composite_score", 0.0),
         ),
         reverse=True,
     )

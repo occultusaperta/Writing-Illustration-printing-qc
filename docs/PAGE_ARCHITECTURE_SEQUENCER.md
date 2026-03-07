@@ -1,4 +1,4 @@
-# Page Architecture Sequencer (Packet 1)
+# Page Architecture Sequencer (Packets 1, 2, 6)
 
 This packet adds PAS planning modules and artifact output only.
 
@@ -31,7 +31,21 @@ This packet adds PAS planning modules and artifact output only.
 - Planning-derived negatives can append text-zone/gutter/intent conflict avoidance hints.
 - If planning artifacts are missing, studio falls back safely to previous behavior.
 
+## Packet 6 integration (local variant scoring)
+- New `bookforge.page_architecture.scoring` module computes bounded local architecture scores against generated candidates.
+- Scored dimensions per candidate:
+  - text readability in planned text/caption zones (busyness + local detail + contrast potential)
+  - focal alignment (saliency peak landing in art vs text zones)
+  - text fitting estimate (text demand vs declared text-zone area, age-band aware)
+  - gutter safety for spread-capable layouts (seam detail density, focal-in-gutter, seam overlap, face-like signal)
+- Typed result model: `ArchitectureVariantScoreResult` with component scores, composite score, and diagnostics/notes.
+- Studio pipeline now loads planning architecture variants when present and passes page text + age band into candidate QA scoring.
+- Candidate metadata now includes `metadata.page_architecture_score` per variant when architecture planning artifacts are available.
+- Review/provenance impact: architecture score diagnostics ride along in existing QA attempt metadata and are human-inspectable in review artifacts.
+- Ranking impact is intentionally weak: architecture score is metadata-first and only used as a late tie-break term.
+
 ## Deferred to later packets
 - Deep layout rewrite/rendering from PAS output.
-- Advanced variant scoring and rescoring loops.
+- Advanced rescoring loops across the full book / global architecture reselection.
 - Layout engine enforcement from PAS zones.
+- Monte Carlo multi-pass optimization and compositor rewrites.
