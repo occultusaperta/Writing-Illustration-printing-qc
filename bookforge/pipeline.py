@@ -48,8 +48,14 @@ from bookforge.review.book_sequence import build_book_sequence_report, write_boo
 from bookforge.review.reselection import (
     apply_reselection_decisions,
     run_bounded_reselection,
-    with_sequence_improvement,
+    with_sequence_improvement as with_reselection_sequence_improvement,
     write_reselection_report,
+)
+from bookforge.review.targeted_regeneration import (
+    apply_targeted_regeneration_decisions,
+    run_targeted_regeneration,
+    with_sequence_improvement as with_targeted_regeneration_sequence_improvement,
+    write_targeted_regeneration_report,
 )
 from bookforge.story.back_matter import generate_blurb_options
 from bookforge.story.prompt_compiler import compile_prompt, tighten_prompt
@@ -1140,20 +1146,152 @@ class BookforgePipeline:
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
-                reselection_report = with_sequence_improvement(
+                reselection_report = with_reselection_sequence_improvement(
                     reselection_report,
                     before_score=before_sequence_score,
                     after_score=float(sequence_report.overall_sequence_score),
                     re_evaluated=True,
                 )
             else:
-                reselection_report = with_sequence_improvement(
+                reselection_report = with_reselection_sequence_improvement(
                     reselection_report,
                     before_score=before_sequence_score,
                     after_score=before_sequence_score,
                     re_evaluated=False,
                 )
         write_reselection_report(review / "reselection_report.json", reselection_report)
+
+        targeted_regen_enabled = _feature_flag("BOOKFORGE_TARGETED_REGENERATION", "false")
+        targeted_before_sequence_score = float(sequence_report.overall_sequence_score)
+        lock_context = {
+            "approved_character_reference": lock.get("approved_character_reference", lock.get("approved_character", "")),
+            "approved_style_reference": lock.get("approved_style_reference", lock.get("approved_style", "")),
+            "negative_prompt": lock.get("locked_negative_prompt", ""),
+            "storyweaver_constraints": {
+                "storyweaver_detected": bool(parsed.get("metadata", {}).get("storyweaver_detected", False)),
+                "declared_pages": int(parsed.get("metadata", {}).get("declared_pages", len(parsed.get("pages", []))) or len(parsed.get("pages", []))),
+                "detected_spreads": parsed.get("metadata", {}).get("detected_spreads", []),
+            },
+        }
+        targeted_report = run_targeted_regeneration(
+            selected=selected,
+            prompts=prompts,
+            qa_attempts=qa_attempts,
+            sequence_report=sequence_report.to_dict(),
+            reselection_report=reselection_report.to_dict(),
+            planning_prompt_guidance=planning_prompt_guidance,
+            lock_context=lock_context,
+            provider_available=bool(_fal_key_from_env()) and provider_name == "fal",
+            max_regenerations_per_run=int(lock.get("review", {}).get("max_regenerations_per_run", 1) or 1),
+            minimum_required_improvement=float(lock.get("review", {}).get("minimum_required_regeneration_improvement", 0.06) or 0.06),
+            variants_per_regeneration=int(lock.get("review", {}).get("variants_per_regeneration", 1) or 1),
+            allow_spread_regeneration=bool(lock.get("review", {}).get("allow_spread_regeneration", False)),
+        ) if targeted_regen_enabled else run_targeted_regeneration(
+            selected=selected,
+            prompts=prompts,
+            qa_attempts=qa_attempts,
+            sequence_report=None,
+            reselection_report=None,
+            planning_prompt_guidance=planning_prompt_guidance,
+            lock_context=lock_context,
+            provider_available=False,
+        )
+
+        if targeted_regen_enabled and targeted_report.enabled and targeted_report.provider_available and targeted_report.decisions:
+            latest_by_page = {}
+            for attempt in qa_attempts:
+                page = attempt.get("page")
+                if not isinstance(page, int):
+                    continue
+                prev = latest_by_page.get(page)
+                if prev is None or int(attempt.get("attempt", 0) or 0) >= int(prev.get("attempt", 0) or 0):
+                    latest_by_page[page] = attempt
+            generated_candidates = {}
+            for decision in targeted_report.decisions:
+                req = decision.request
+                if not req:
+                    continue
+                page_no = int(req.page)
+                if not (0 < page_no <= len(prompts)):
+                    continue
+                base_prompt = str(prompts[page_no - 1].get("prompt", ""))
+                regen_prompt = f"{base_prompt} {req.prompt_delta}".strip()
+                regen = ill.generate_page_variants(
+                    [{"page_number": page_no, "prompt": regen_prompt}],
+                    out / "images" / "variants_raw",
+                    (req_w, req_h),
+                    int(targeted_report.config.get("variants_per_regeneration", 1) or 1),
+                    Path(lock.get("approved_character_reference", lock["approved_character"])),
+                    Path(lock.get("approved_style_reference", lock["approved_style"])),
+                    Path(lock["approved_style"]).with_name(f"palette_tile_v{lock['approved_variant']}.png"),
+                    lock["fal"]["steps"],
+                    seeds={page_no: page_seeds.get(page_no, 0) + 9000},
+                    cache_dir=out / "cache",
+                )
+                regen_variants = []
+                for raw_path in [Path(p) for p in regen.get("variants", {}).get(page_no, [])]:
+                    graded_path = out / "images" / "variants" / raw_path.name
+                    self._postprocess_variant(raw_path, graded_path, Path(lock["approved_style"]), lock, page_no)
+                    regen_variants.append(graded_path)
+                if not regen_variants:
+                    continue
+                prev_ref = Path(selected[page_no - 2]) if page_no > 1 else None
+                _, regen_qa = choose_best_variant(
+                    regen_variants,
+                    lock["qa"],
+                    Path(lock["approved_style"]),
+                    prev_ref,
+                    page_number=page_no,
+                    page_color_spec=color_spec_by_page.get(page_no),
+                    master_palette=master_palette,
+                    page_text=str(parsed["pages"][page_no - 1].get("text", "")) if page_no - 1 < len(parsed["pages"]) else "",
+                    architecture_variant=architecture_by_page.get(page_no),
+                    age_range=str(lock.get("editorial", {}).get("age_band", "")),
+                )
+                generated_candidates[page_no] = regen_qa.get("best", {})
+
+            targeted_report = apply_targeted_regeneration_decisions(
+                selected=selected,
+                report=targeted_report,
+                sequence_report=sequence_report.to_dict(),
+                previous_candidates={p: a.get("best", {}) for p, a in latest_by_page.items()},
+                generated_candidates=generated_candidates,
+            )
+            if targeted_report.replaced_targets:
+                premium_qc = run_premium_visual_qc(
+                    [Path(p) for p in selected],
+                    lock=lock,
+                    parsed_story=parsed,
+                    provider_provenance={
+                        "provider": provider_name,
+                        "endpoint": generated.get("endpoint", endpoint),
+                        "generated_provenance": generated.get("provenance", {}),
+                    },
+                )
+                sequence_after = build_book_sequence_report(
+                    page_count=len(parsed.get("pages", [])),
+                    color_script=color_script_payload if isinstance(color_script_payload, dict) else None,
+                    architecture_plan=architecture_plan,
+                    applied_arch_rows=applied_arch_review,
+                    qa_attempts=qa_attempts,
+                    premium_qc=premium_qc,
+                )
+                sequence_report = sequence_after
+                write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
+                targeted_report = with_targeted_regeneration_sequence_improvement(
+                    targeted_report,
+                    before_score=targeted_before_sequence_score,
+                    after_score=float(sequence_report.overall_sequence_score),
+                    re_evaluated=True,
+                )
+            else:
+                targeted_report = with_targeted_regeneration_sequence_improvement(
+                    targeted_report,
+                    before_score=targeted_before_sequence_score,
+                    after_score=targeted_before_sequence_score,
+                    re_evaluated=False,
+                )
+        write_targeted_regeneration_report(review / "targeted_regeneration_report.json", targeted_report)
         preprod_editorial = out / "preprod" / "editorial"
         _copy_companion_to_review(out)
         if preprod_editorial.exists():
@@ -1196,6 +1334,7 @@ class BookforgePipeline:
             "review/visual_critic_report.json",
             "review/book_sequence_report.json",
             "review/reselection_report.json",
+            "review/targeted_regeneration_report.json",
             "review/report.html",
         ]
 
@@ -1272,6 +1411,14 @@ class BookforgePipeline:
                     failures.append(f"reselection_report.json missing {field}")
         else:
             warnings.append("Missing review/reselection_report.json")
+        targeted_regen_report_path = review_dir / "targeted_regeneration_report.json"
+        if targeted_regen_report_path.exists():
+            targeted_regen = json.loads(targeted_regen_report_path.read_text(encoding="utf-8"))
+            for field in ["enabled", "config", "eligible_targets", "decisions", "sequence_improvement"]:
+                if field not in targeted_regen:
+                    failures.append(f"targeted_regeneration_report.json missing {field}")
+        else:
+            warnings.append("Missing review/targeted_regeneration_report.json")
         companion_dir = review_dir / "companion"
         story_parsed_path = out / "preprod" / "story_parsed.json"
         expects_companion = False
