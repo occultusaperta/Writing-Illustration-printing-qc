@@ -11,6 +11,7 @@ from bookforge.qc.composition_qc import focus_bleed_overlap
 from bookforge.color_script.postprocess import apply_color_postprocess
 from bookforge.color_script.scoring import score_candidate_image_colors
 from bookforge.qc.gpu_batch_scoring import gpu_batch_scoring_enabled, score_candidate_batch
+from bookforge.qc.ensemble_visual import evaluate_visual_ensemble
 from bookforge.qc.print_qc import analyze_print_qc, print_qc_warnings
 from bookforge.qc.visual_integrity import (
     border_artifact_score,
@@ -148,9 +149,9 @@ def choose_best_variant(
         gpu = batch_scores.get(report["path"])
         if gpu:
             report["gpu_batch_scores"] = gpu
+        metadata = report.setdefault("metadata", {})
         if page_number is not None:
             color_score = score_candidate_image_colors(report["path"], page_number=page_number, page_spec=page_color_spec, master_palette=master_palette)
-            metadata = report.setdefault("metadata", {})
             metadata["color_score"] = color_score.to_dict()
             if color_score.disposition == "POST_PROCESS":
                 correction_spec = dict(page_color_spec or {})
@@ -167,6 +168,18 @@ def choose_best_variant(
                     "path": str(corrected_path),
                     "postprocess_score_delta": postprocess.delta_scores_estimate.get("composite_delta", 0.0),
                 }
+
+        ensemble = evaluate_visual_ensemble(report["path"])
+        metadata["visual_ensemble"] = {
+            "critic_scores": {
+                "composition_score": ensemble.composition_score,
+                "clarity_score": ensemble.clarity_score,
+                "texture_score": ensemble.texture_score,
+                "artifact_score": ensemble.artifact_score,
+                "perceptual_quality": ensemble.perceptual_quality,
+            },
+            "ensemble_score": ensemble.ensemble_score,
+        }
 
     scored = sorted(
         reports,
