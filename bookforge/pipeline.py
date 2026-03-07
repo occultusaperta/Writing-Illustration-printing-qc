@@ -45,6 +45,12 @@ from bookforge.review.contact_sheet import generate_contact_sheet
 from bookforge.review.html_report import generate_report as generate_html_report
 from bookforge.review.proof_pack import generate_proof_pack, write_production_report
 from bookforge.review.book_sequence import build_book_sequence_report, write_book_sequence_report
+from bookforge.review.reselection import (
+    apply_reselection_decisions,
+    run_bounded_reselection,
+    with_sequence_improvement,
+    write_reselection_report,
+)
 from bookforge.story.back_matter import generate_blurb_options
 from bookforge.story.prompt_compiler import compile_prompt, tighten_prompt
 from bookforge.story.story_spec import build_bible_variants, parse_story
@@ -1099,6 +1105,55 @@ class BookforgePipeline:
             premium_qc=premium_qc,
         )
         write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
+
+        reselection_enabled = _feature_flag("BOOKFORGE_RESELECTION", "false")
+        before_sequence_score = float(sequence_report.overall_sequence_score)
+        reselection_report = run_bounded_reselection(
+            selected=selected,
+            qa_attempts=qa_attempts,
+            sequence_report=sequence_report.to_dict(),
+            max_reselections_per_run=int(lock.get("review", {}).get("max_reselections_per_run", 2) or 2),
+            minimum_required_improvement=float(lock.get("review", {}).get("minimum_required_improvement", 0.04) or 0.04),
+            allow_regeneration=bool(lock.get("review", {}).get("allow_reselection_regeneration", False)),
+        ) if reselection_enabled else run_bounded_reselection(selected=selected, qa_attempts=qa_attempts, sequence_report=None)
+
+        if reselection_enabled and reselection_report.enabled:
+            reselection_report = apply_reselection_decisions(selected, reselection_report)
+            if reselection_report.replaced_pages:
+                premium_qc = run_premium_visual_qc(
+                    [Path(p) for p in selected],
+                    lock=lock,
+                    parsed_story=parsed,
+                    provider_provenance={
+                        "provider": provider_name,
+                        "endpoint": generated.get("endpoint", endpoint),
+                        "generated_provenance": generated.get("provenance", {}),
+                    },
+                )
+                sequence_after = build_book_sequence_report(
+                    page_count=len(parsed.get("pages", [])),
+                    color_script=color_script_payload if isinstance(color_script_payload, dict) else None,
+                    architecture_plan=architecture_plan,
+                    applied_arch_rows=applied_arch_review,
+                    qa_attempts=qa_attempts,
+                    premium_qc=premium_qc,
+                )
+                sequence_report = sequence_after
+                write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
+                reselection_report = with_sequence_improvement(
+                    reselection_report,
+                    before_score=before_sequence_score,
+                    after_score=float(sequence_report.overall_sequence_score),
+                    re_evaluated=True,
+                )
+            else:
+                reselection_report = with_sequence_improvement(
+                    reselection_report,
+                    before_score=before_sequence_score,
+                    after_score=before_sequence_score,
+                    re_evaluated=False,
+                )
+        write_reselection_report(review / "reselection_report.json", reselection_report)
         preprod_editorial = out / "preprod" / "editorial"
         _copy_companion_to_review(out)
         if preprod_editorial.exists():
@@ -1140,6 +1195,7 @@ class BookforgePipeline:
             "review/qa_report.json",
             "review/visual_critic_report.json",
             "review/book_sequence_report.json",
+            "review/reselection_report.json",
             "review/report.html",
         ]
 
@@ -1208,6 +1264,14 @@ class BookforgePipeline:
                     failures.append(f"book_sequence_report.json missing {field}")
         else:
             warnings.append("Missing review/book_sequence_report.json")
+        reselection_report_path = review_dir / "reselection_report.json"
+        if reselection_report_path.exists():
+            reselection = json.loads(reselection_report_path.read_text(encoding="utf-8"))
+            for field in ["config", "considered_pages", "eligible_pages", "replaced_pages", "decisions", "sequence_improvement"]:
+                if field not in reselection:
+                    failures.append(f"reselection_report.json missing {field}")
+        else:
+            warnings.append("Missing review/reselection_report.json")
         companion_dir = review_dir / "companion"
         story_parsed_path = out / "preprod" / "story_parsed.json"
         expects_companion = False
