@@ -42,6 +42,7 @@ class FluxLocalImageProvider:
             height=image_size_px[1],
             steps=int(steps),
             quality_preset=str(os.getenv("BOOKFORGE_FLUX_QUALITY", "draft")),
+            model_name=os.getenv("BOOKFORGE_FLUX_MODEL"),
         ).to_payload()
         png, _, _ = self._call_local_flux(payload)
         out_path.write_bytes(png)
@@ -85,9 +86,10 @@ class FluxLocalImageProvider:
                     steps=int(steps),
                     seed=seed,
                     quality_preset=str(os.getenv("BOOKFORGE_FLUX_QUALITY", "draft")),
+                    model_name=os.getenv("BOOKFORGE_FLUX_MODEL"),
                 ).to_payload()
                 if composite_ref or reference_image:
-                    payload["reference_image"] = str(composite_ref or reference_image)
+                    payload["references"] = [str(composite_ref or reference_image)]
                 key = cache_key_for_request(self.url, payload)
                 png, from_cache, prov = self._call_local_flux(payload)
                 out = variants_dir / f"page_{page_no:03d}_v{idx}.png"
@@ -103,12 +105,19 @@ class FluxLocalImageProvider:
         return {"provider": self.name, "variants": results, "endpoint": self.url, "cache_hits": cache_hits, "cache_keys": cache_keys, "provenance": provenance}
 
     def _call_local_flux(self, payload: Dict[str, Any], timeout_s: int = 120, retries: int = 2) -> tuple[bytes, bool, Dict[str, Any]]:
-        ref_path = payload.get("reference_image")
-        if ref_path and Path(ref_path).exists():
-            with Image.open(Path(ref_path)) as ref:
-                buff = io.BytesIO()
-                ref.convert("RGB").save(buff, format="PNG")
-            payload["reference_image"] = base64.b64encode(buff.getvalue()).decode("utf-8")
+        refs = payload.get("references") if isinstance(payload.get("references"), list) else []
+        encoded_refs = []
+        for ref_path in refs:
+            p = Path(str(ref_path))
+            if p.exists():
+                with Image.open(p) as ref:
+                    buff = io.BytesIO()
+                    ref.convert("RGB").save(buff, format="PNG")
+                encoded_refs.append(base64.b64encode(buff.getvalue()).decode("utf-8"))
+            else:
+                encoded_refs.append(str(ref_path))
+        if encoded_refs:
+            payload["references"] = encoded_refs
 
         last_exc: Exception | None = None
         for attempt in range(retries + 1):

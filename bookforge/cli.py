@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from bookforge.pipeline import BookforgePipeline
+from bookforge.runtime.orchestration import RuntimeOrchestrator, config_from_env, load_runtime_state
 
 
 def main() -> None:
@@ -45,10 +46,37 @@ def main() -> None:
     ui.add_argument("--host", default="127.0.0.1")
     ui.add_argument("--port", type=int, default=8501)
 
+    runtime_provision = sub.add_parser("runtime-provision", help="Provision rented GPU runtime using env credentials")
+    runtime_provision.add_argument("--max-hourly-usd", type=float)
+    runtime_provision.add_argument("--min-gpu-ram-gb", type=int)
+
+    runtime_bootstrap = sub.add_parser("runtime-bootstrap", help="Bootstrap runtime host over SSH")
+    runtime_bootstrap.add_argument("--host")
+    runtime_bootstrap.add_argument("--ssh-port", type=int, default=22)
+    runtime_bootstrap.add_argument("--ssh-user")
+
+    runtime_launch = sub.add_parser("runtime-launch", help="Launch flux_local service on runtime host")
+    runtime_launch.add_argument("--host")
+    runtime_launch.add_argument("--ssh-port", type=int, default=22)
+    runtime_launch.add_argument("--ssh-user")
+    runtime_launch.add_argument("--model")
+
+    runtime_health = sub.add_parser("runtime-health", help="Check runtime provider status and service health")
+    runtime_health.add_argument("--instance-id")
+    runtime_health.add_argument("--url")
+
+    runtime_stop = sub.add_parser("runtime-stop", help="Stop provisioned runtime instance")
+    runtime_stop.add_argument("--instance-id")
+
+    runtime_destroy = sub.add_parser("runtime-destroy", help="Destroy provisioned runtime instance")
+    runtime_destroy.add_argument("--instance-id")
+
     args = parser.parse_args()
     pipeline = BookforgePipeline()
 
     try:
+        runtime_cfg = config_from_env()
+        runtime_state = load_runtime_state(runtime_cfg.state_path)
         if args.command == "doctor":
             result = pipeline.doctor(strict=args.strict)
         elif args.command == "preprod":
@@ -86,12 +114,56 @@ def main() -> None:
                 ]
                 proc = subprocess.run(fallback)
             sys.exit(proc.returncode)
+        elif args.command == "runtime-provision":
+            orch = RuntimeOrchestrator(runtime_cfg)
+            if args.max_hourly_usd is not None:
+                orch.cfg.max_hourly_usd = args.max_hourly_usd
+            if args.min_gpu_ram_gb is not None:
+                orch.cfg.min_gpu_ram_gb = args.min_gpu_ram_gb
+            result = orch.provision()
+        elif args.command == "runtime-bootstrap":
+            host = args.host or runtime_state.get("instance", {}).get("host")
+            if not host:
+                raise RuntimeError("runtime-bootstrap requires --host or saved runtime state with host")
+            orch = RuntimeOrchestrator(runtime_cfg)
+            result = orch.bootstrap(host=host, port=args.ssh_port, user=args.ssh_user)
+        elif args.command == "runtime-launch":
+            host = args.host or runtime_state.get("instance", {}).get("host")
+            if not host:
+                raise RuntimeError("runtime-launch requires --host or saved runtime state with host")
+            orch = RuntimeOrchestrator(runtime_cfg)
+            result = orch.launch_service(host=host, port=args.ssh_port, user=args.ssh_user, model_name=args.model)
+        elif args.command == "runtime-health":
+            orch = RuntimeOrchestrator(runtime_cfg)
+            instance_id = args.instance_id or runtime_state.get("instance", {}).get("instance_id")
+            result = {}
+            if instance_id:
+                result["instance"] = orch.status(instance_id=instance_id)
+            if args.url:
+                from bookforge.runtime.health import check_http_health
+
+                result["service"] = check_http_health(args.url)
+            if not result:
+                raise RuntimeError("runtime-health needs --instance-id, --url, or saved runtime state")
+            result["status"] = "ok"
+        elif args.command == "runtime-stop":
+            instance_id = args.instance_id or runtime_state.get("instance", {}).get("instance_id")
+            if not instance_id:
+                raise RuntimeError("runtime-stop requires --instance-id or saved runtime state")
+            orch = RuntimeOrchestrator(runtime_cfg)
+            result = orch.stop(instance_id=instance_id)
+        elif args.command == "runtime-destroy":
+            instance_id = args.instance_id or runtime_state.get("instance", {}).get("instance_id")
+            if not instance_id:
+                raise RuntimeError("runtime-destroy requires --instance-id or saved runtime state")
+            orch = RuntimeOrchestrator(runtime_cfg)
+            result = orch.destroy(instance_id=instance_id)
         else:
             parser.print_help()
             sys.exit(1)
 
         print(json.dumps(result, indent=2))
-        sys.exit(0 if result.get("status") in {"PASS", "WARN"} else 1)
+        sys.exit(0 if result.get("status") in {"PASS", "WARN", "ok"} else 1)
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
