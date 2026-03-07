@@ -125,6 +125,8 @@ def test_verify_checks_character_commercial_artifact(tmp_path):
                 payload = {"enabled": True, "summary_score": 0.5, "lead_character_strength_summary": "Moderate", "weakest_pages": [], "strongest_pages": [], "limitations": []}
             elif f.name == "layout_search_report.json":
                 payload = {"summary": {}, "pages": []}
+            elif f.name == "sequence_optimization_report.json":
+                payload = {"enabled": False, "config": {}, "pages_considered": [], "candidate_moves_considered": 0, "accepted_moves": [], "rejected_moves": [], "cap_hit": False, "before_summary": {}, "after_summary": {}, "net_improvement": {}}
             else:
                 payload = {}
             f.write_text(json.dumps(payload), encoding="utf-8")

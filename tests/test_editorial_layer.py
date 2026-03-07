@@ -147,6 +147,8 @@ def test_verify_warns_not_fails_when_editorial_missing(tmp_path: Path):
                 payload = {"overall_sequence_score": 0.9, "color_flow_summary_score": 0.9, "architecture_flow_summary_score": 0.9, "energy_curve_summary_score": 0.9, "weak_clusters": [], "saliency_flow_sequence": {}}
             elif path.name == "layout_search_report.json":
                 payload = {"summary": {}, "pages": []}
+            elif path.name == "sequence_optimization_report.json":
+                payload = {"enabled": False, "config": {}, "pages_considered": [], "candidate_moves_considered": 0, "accepted_moves": [], "rejected_moves": [], "cap_hit": False, "before_summary": {}, "after_summary": {}, "net_improvement": {}}
             elif path.name == "production_report.json":
                 payload = {"post": {"crop_mode": "smart", "director_grade_enabled": True, "tone_curve_preset": "storybook_lux"}, "qa_thresholds": {}, "cache_hit_rate": 1.0}
             elif path.name == "reselection_report.json":

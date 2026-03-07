@@ -105,6 +105,8 @@ def test_verify_command_missing_and_pass(tmp_path: Path):
                 payload = {"enabled": True, "summary_score": 0.5, "lead_character_strength_summary": "Moderate", "weakest_pages": [], "strongest_pages": [], "limitations": []}
             elif path.name == "layout_search_report.json":
                 payload = {"summary": {}, "pages": []}
+            elif path.name == "sequence_optimization_report.json":
+                payload = {"enabled": False, "config": {}, "pages_considered": [], "candidate_moves_considered": 0, "accepted_moves": [], "rejected_moves": [], "cap_hit": False, "before_summary": {}, "after_summary": {}, "net_improvement": {}}
             else:
                 payload = {}
             path.write_text(json.dumps(payload), encoding="utf-8")
