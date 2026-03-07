@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 from PIL import Image
 
 from bookforge.review.reselection import _score_local, _score_sequence_support
-from bookforge.utils import clamp01
+from bookforge.utils import clamp01, PREMIUM_QC_WEAK_THRESHOLD, COLOR_TRANSITION_WEAK_THRESHOLD, SEVERE_COLOR_THRESHOLD, SEVERE_ENSEMBLE_THRESHOLD, SEVERE_ARCHITECTURE_THRESHOLD, SEVERE_SALIENCY_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -88,13 +88,13 @@ def write_targeted_regeneration_report(path: Path, report: RegenerationRunReport
 def _weak_dimensions(candidate: Dict[str, Any]) -> List[str]:
     metadata = candidate.get("metadata", {}) if isinstance(candidate.get("metadata", {}), dict) else {}
     dims: List[str] = []
-    if float(((metadata.get("color_score") or {}).get("composite_score", 1.0)) or 1.0) < 0.68:
+    if float(((metadata.get("color_score") or {}).get("composite_score", 1.0)) or 1.0) < SEVERE_COLOR_THRESHOLD:
         dims.append("color")
-    if float(((metadata.get("visual_ensemble") or {}).get("ensemble_score", 1.0)) or 1.0) < 0.70:
+    if float(((metadata.get("visual_ensemble") or {}).get("ensemble_score", 1.0)) or 1.0) < SEVERE_ENSEMBLE_THRESHOLD:
         dims.append("visual_ensemble")
-    if float(((metadata.get("page_architecture_score") or {}).get("composite_score", 1.0)) or 1.0) < 0.65:
+    if float(((metadata.get("page_architecture_score") or {}).get("composite_score", 1.0)) or 1.0) < SEVERE_ARCHITECTURE_THRESHOLD:
         dims.append("architecture")
-    if float(((metadata.get("saliency_flow_score") or {}).get("composite_score", 1.0)) or 1.0) < 0.45:
+    if float(((metadata.get("saliency_flow_score") or {}).get("composite_score", 1.0)) or 1.0) < SEVERE_SALIENCY_THRESHOLD:
         dims.append("saliency_flow")
     overlap = float(candidate.get("focus_bleed_overlap", 0.0) or 0.0)
     if overlap > 0.16:
@@ -113,10 +113,10 @@ def _is_sequence_flagged(page: int, sequence_report: Dict[str, Any]) -> bool:
             continue
         if int(row.get("page", 0) or 0) != page:
             continue
-        if float(row.get("premium_qc_score", 1.0) or 1.0) < 0.76:
+        if float(row.get("premium_qc_score", 1.0) or 1.0) < PREMIUM_QC_WEAK_THRESHOLD:
             return True
         score = row.get("color_transition_to_page_score")
-        if score is not None and float(score) < 0.70:
+        if score is not None and float(score) < COLOR_TRANSITION_WEAK_THRESHOLD:
             return True
     return False
 

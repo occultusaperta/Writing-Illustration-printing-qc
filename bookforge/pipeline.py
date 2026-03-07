@@ -1780,8 +1780,9 @@ class BookforgePipeline:
                 failures.append("preflight_report.json status is FAIL")
 
         production_path = out / "review" / "production_report.json"
-        if production_path.exists():
-            production = json.loads(production_path.read_text(encoding="utf-8"))
+        prod_data = json.loads(production_path.read_text(encoding="utf-8")) if production_path.exists() else {}
+        if prod_data:
+            production = prod_data
             post = production.get("post", {})
             required_post = {"crop_mode", "director_grade_enabled", "tone_curve_preset"}
             missing_post = sorted(required_post - set(post.keys()))
@@ -1868,8 +1869,8 @@ class BookforgePipeline:
         else:
             warnings.append("Missing review/character_commercial_report.json")
 
-        dual_audience_enabled = bool((json.loads((review_dir / "production_report.json").read_text(encoding="utf-8")) if (review_dir / "production_report.json").exists() else {}).get("dual_audience", {}).get("enabled", True))
-        page_turn_tension_enabled = bool((json.loads((review_dir / "production_report.json").read_text(encoding="utf-8")) if (review_dir / "production_report.json").exists() else {}).get("page_turn_tension", {}).get("enabled", True))
+        dual_audience_enabled = bool(prod_data.get("dual_audience", {}).get("enabled", True))
+        page_turn_tension_enabled = bool(prod_data.get("page_turn_tension", {}).get("enabled", True))
         dual_audience_report_path = review_dir / "dual_audience_report.json"
         if dual_audience_report_path.exists():
             payload = json.loads(dual_audience_report_path.read_text(encoding="utf-8"))
@@ -1939,8 +1940,7 @@ class BookforgePipeline:
             expects_companion = bool(parsed_story.get("metadata", {}).get("storyweaver_detected", False))
         if expects_companion and not companion_dir.exists():
             warnings.append("Missing review/companion (allowed for older runs)")
-        prod = json.loads(production_path.read_text(encoding="utf-8")) if production_path.exists() else {}
-        if prod.get("editorial", {}).get("readaloud_script_enabled", True) and not (review_dir / "readaloud_script.md").exists():
+        if prod_data.get("editorial", {}).get("readaloud_script_enabled", True) and not (review_dir / "readaloud_script.md").exists():
             warnings.append("Missing review/readaloud_script.md")
 
         zip_path = out / "bookforge_package.zip"
