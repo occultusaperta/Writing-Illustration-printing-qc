@@ -12,6 +12,7 @@ from bookforge.typography.types import TypographySequenceFinding
 from bookforge.saliency_flow.types import SaliencySequenceFinding
 from bookforge.hidden_world import build_hidden_world_sequence_finding
 from bookforge.hidden_world.types import HiddenWorldSequenceFinding
+from bookforge.dual_audience.sequence import build_dual_audience_report
 
 
 def _clamp01(value: float) -> float:
@@ -95,6 +96,7 @@ class BookSequenceReport:
     hidden_world_sequence: HiddenWorldSequenceFinding
     character_commercial_summary: Dict[str, Any]
     layout_search_summary: Dict[str, Any]
+    dual_audience_summary: Dict[str, Any]
     per_page_notes: List[Dict[str, Any]]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -518,6 +520,7 @@ def build_book_sequence_report(
     hidden_world_plan: Dict[str, Any] | None = None,
     character_commercial_report: Dict[str, Any] | None = None,
     layout_search_report: Dict[str, Any] | None = None,
+    dual_audience_enabled: bool = True,
 ) -> BookSequenceReport:
     color_script = color_script if isinstance(color_script, dict) else {}
     architecture_plan = architecture_plan if isinstance(architecture_plan, list) else []
@@ -547,6 +550,7 @@ def build_book_sequence_report(
     saliency_flow_sequence = build_saliency_sequence_finding(page_count, qa_attempts, camera_sequence_plan)
     typography_sequence = build_typography_sequence_finding(typography_rows)
     hidden_world_sequence = build_hidden_world_sequence_finding(page_count=page_count, hidden_world_plan=hidden_world_plan, qa_attempts=qa_attempts)
+    dual_audience_report = build_dual_audience_report(page_count=page_count, qa_attempts=qa_attempts, enabled=dual_audience_enabled)
 
     warnings: List[str] = []
     errors: List[str] = []
@@ -579,13 +583,14 @@ def build_book_sequence_report(
     summary_notes.extend(saliency_flow_sequence.camera_mismatch_warnings[:1])
     summary_notes.extend(typography_sequence.sequence_notes[:1])
     summary_notes.extend(hidden_world_sequence.positive_rereadability_highlights[:1])
+    summary_notes.extend(dual_audience_report.positive_notes[:1])
     summary_notes.extend([str(n) for n in character_commercial_report.get("warnings", [])[:1]])
     summary_notes.extend([str(n) for n in (layout_search_report.get("summary", {}) or {}).get("notes", [])[:1]])
     if not summary_notes:
         summary_notes.append("Sequence diagnostics completed with no major warnings.")
 
     overall = round(
-        _clamp01(0.22 * color_score + 0.2 * architecture_flow.summary_score + 0.16 * energy_curve.mismatch_score + 0.12 * camera_sequence.summary_score + 0.1 * saliency_flow_sequence.summary_score + 0.1 * typography_sequence.summary_score + 0.1 * hidden_world_sequence.summary_score),
+        _clamp01(0.2 * color_score + 0.18 * architecture_flow.summary_score + 0.15 * energy_curve.mismatch_score + 0.11 * camera_sequence.summary_score + 0.1 * saliency_flow_sequence.summary_score + 0.09 * typography_sequence.summary_score + 0.09 * hidden_world_sequence.summary_score + 0.08 * dual_audience_report.summary_score),
         4,
     )
 
@@ -606,6 +611,9 @@ def build_book_sequence_report(
                 "typography_composite_score": float(next(((row.get("typography_score", {}) or {}).get("composite_score", 0.0) for row in typography_rows if _safe_page_int(row.get("page")) == p), 0.0) or 0.0),
                 "hidden_world_composite_score": float(((qa_by_page.get(p, {}).get("metadata", {}) or {}).get("hidden_world_score", {}) or {}).get("composite_score", 0.0) or 0.0),
                 "layout_search_top_score": float(next((row.get("top_score", 0.0) for row in (layout_search_report.get("pages", []) if isinstance(layout_search_report.get("pages", []), list) else []) if p in (row.get("page_numbers", []) or [])), 0.0) or 0.0),
+                "dual_audience_child_score": float((((qa_by_page.get(p, {}).get("metadata", {}) or {}).get("dual_audience_score", {}) or {}).get("child_channel_score", {}) or {}).get("composite_score", 0.0) or 0.0),
+                "dual_audience_adult_score": float((((qa_by_page.get(p, {}).get("metadata", {}) or {}).get("dual_audience_score", {}) or {}).get("adult_channel_score", {}) or {}).get("composite_score", 0.0) or 0.0),
+                "dual_audience_balance_score": float((((qa_by_page.get(p, {}).get("metadata", {}) or {}).get("dual_audience_score", {}) or {}).get("balance_score", 0.0) or 0.0)),
             }
         )
 
@@ -639,6 +647,16 @@ def build_book_sequence_report(
             "mean_top_score": float((layout_search_report.get("summary", {}) or {}).get("mean_top_score", 0.0) or 0.0),
             "total_rejected": int((layout_search_report.get("summary", {}) or {}).get("total_rejected", 0) or 0),
             "sequence_notes": list(layout_search_report.get("sequence_notes", []) or []),
+        },
+        dual_audience_summary={
+            "enabled": bool(dual_audience_report.enabled),
+            "summary_score": float(dual_audience_report.summary_score),
+            "child_channel_summary_score": float(dual_audience_report.child_channel_summary_score),
+            "adult_channel_summary_score": float(dual_audience_report.adult_channel_summary_score),
+            "balance_summary_score": float(dual_audience_report.balance_summary_score),
+            "warnings": list(dual_audience_report.warnings),
+            "positive_notes": list(dual_audience_report.positive_notes),
+            "limitations": list(dual_audience_report.limitations),
         },
         per_page_notes=per_page_notes,
     )

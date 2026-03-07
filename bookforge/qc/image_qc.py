@@ -17,6 +17,7 @@ from bookforge.qc.ensemble_visual import evaluate_visual_ensemble
 from bookforge.camera_language.scoring import score_shot_adherence
 from bookforge.saliency_flow import score_saliency_flow
 from bookforge.hidden_world import score_hidden_world_adherence
+from bookforge.dual_audience import score_dual_audience
 from bookforge.character_scoring import score_character_commercial
 from bookforge.qc.print_qc import analyze_print_qc, print_qc_warnings
 from bookforge.qc.visual_integrity import (
@@ -155,6 +156,7 @@ def choose_best_variant(
 ) -> Tuple[Path, Dict[str, Any]]:
     character_commercial_enabled = str(os.getenv("BOOKFORGE_CHARACTER_COMMERCIAL_SCORING", "true")).strip().lower() in {"1", "true", "yes", "on"}
     saliency_flow_enabled = str(os.getenv("BOOKFORGE_SALIENCY_FLOW", "true")).strip().lower() in {"1", "true", "yes", "on"}
+    dual_audience_enabled = str(os.getenv("BOOKFORGE_DUAL_AUDIENCE", "true")).strip().lower() in {"1", "true", "yes", "on"}
     batch_scores: Dict[str, Dict[str, float]] = {}
     if gpu_batch_scoring_enabled():
         batch_scores = score_candidate_batch(paths)
@@ -241,6 +243,8 @@ def choose_best_variant(
                     "warnings": [f"Character commercial scoring unavailable: {exc}"],
                     "notes": ["Scoring skipped due to bounded safe no-op behavior."],
                 }
+        if dual_audience_enabled:
+            metadata["dual_audience_score"] = score_dual_audience(report).to_dict()
 
     scored = sorted(
         reports,
@@ -254,6 +258,7 @@ def choose_best_variant(
             0.15 * (((r.get("metadata") or {}).get("shot_adherence_score") or {}).get("composite_score", 0.0)),
             0.05 * (((r.get("metadata") or {}).get("saliency_flow_score") or {}).get("composite_score", 0.0)),
             0.04 * (((r.get("metadata") or {}).get("character_commercial_score") or {}).get("composite_score", 0.0)),
+            0.035 * (((r.get("metadata") or {}).get("dual_audience_score") or {}).get("composite_score", 0.0)),
         ),
         reverse=True,
     )

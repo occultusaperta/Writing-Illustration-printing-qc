@@ -57,6 +57,7 @@ from bookforge.review.contact_sheet import generate_contact_sheet
 from bookforge.review.html_report import generate_report as generate_html_report
 from bookforge.review.proof_pack import generate_proof_pack, write_production_report
 from bookforge.review.book_sequence import build_book_sequence_report, write_book_sequence_report
+from bookforge.dual_audience import build_dual_audience_report, write_dual_audience_report
 from bookforge.review.reselection import (
     apply_reselection_decisions,
     run_bounded_reselection,
@@ -209,6 +210,11 @@ def _storefront_optimization_enabled() -> bool:
 
 def _character_commercial_scoring_enabled() -> bool:
     return _feature_flag("BOOKFORGE_CHARACTER_COMMERCIAL_SCORING", default="true")
+
+
+
+def _dual_audience_enabled() -> bool:
+    return _feature_flag("BOOKFORGE_DUAL_AUDIENCE", default="true")
 
 
 def _monte_carlo_layout_enabled() -> bool:
@@ -1298,7 +1304,7 @@ class BookforgePipeline:
         )[:5]
         cache_bools = [hit for arr in cache_hits.values() for hit in arr]
         cache_hit_rate = (sum(1 for x in cache_bools if x) / len(cache_bools)) if cache_bools else 0.0
-        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "hidden_world": {"enabled": _hidden_world_enabled(), "planned_pages": len(hidden_world_by_page)}, "storefront": {"enabled": _storefront_optimization_enabled()}, "character_commercial_scoring": {"enabled": _character_commercial_scoring_enabled()}, "layout_search": {"enabled": _monte_carlo_layout_enabled(), "entries": len(layout_search_results)}, "applied_page_architecture": applied_arch_review}
+        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "hidden_world": {"enabled": _hidden_world_enabled(), "planned_pages": len(hidden_world_by_page)}, "storefront": {"enabled": _storefront_optimization_enabled()}, "character_commercial_scoring": {"enabled": _character_commercial_scoring_enabled()}, "dual_audience": {"enabled": _dual_audience_enabled()}, "layout_search": {"enabled": _monte_carlo_layout_enabled(), "entries": len(layout_search_results)}, "applied_page_architecture": applied_arch_review}
         write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
         _studio_debug("running premium visual QC")
@@ -1364,8 +1370,15 @@ class BookforgePipeline:
                 enabled=_character_commercial_scoring_enabled(),
             ).to_dict(),
             layout_search_report=layout_search_report,
+            dual_audience_enabled=_dual_audience_enabled(),
         )
         write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
+        dual_audience_report = build_dual_audience_report(
+            page_count=len(parsed.get("pages", [])),
+            qa_attempts=qa_attempts,
+            enabled=_dual_audience_enabled(),
+        )
+        write_dual_audience_report(review / "dual_audience_report.json", dual_audience_report)
         character_commercial_report = build_character_commercial_report(
             page_count=len(parsed.get("pages", [])),
             qa_attempts=qa_attempts,
@@ -1445,6 +1458,7 @@ class BookforgePipeline:
                         enabled=_character_commercial_scoring_enabled(),
                     ).to_dict(),
                     layout_search_report=layout_search_report,
+                    dual_audience_enabled=_dual_audience_enabled(),
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
@@ -1611,6 +1625,7 @@ class BookforgePipeline:
                         enabled=_character_commercial_scoring_enabled(),
                     ).to_dict(),
                     layout_search_report=layout_search_report,
+                    dual_audience_enabled=_dual_audience_enabled(),
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
@@ -1665,6 +1680,13 @@ class BookforgePipeline:
         }
         write_production_report(review / "production_report.json", production_payload)
 
+        final_dual_audience_report = build_dual_audience_report(
+            page_count=len(parsed.get("pages", [])),
+            qa_attempts=qa_attempts,
+            enabled=_dual_audience_enabled(),
+        )
+        write_dual_audience_report(review / "dual_audience_report.json", final_dual_audience_report)
+
         preprod_editorial = out / "preprod" / "editorial"
         _copy_companion_to_review(out)
         if preprod_editorial.exists():
@@ -1714,6 +1736,7 @@ class BookforgePipeline:
             "review/hidden_world_report.json",
             "review/storefront_optimization_report.json",
             "review/character_commercial_report.json",
+            "review/dual_audience_report.json",
             "review/report.html",
         ]
 
@@ -1787,6 +1810,7 @@ class BookforgePipeline:
                 "energy_curve_summary_score",
                 "weak_clusters",
                 "saliency_flow_sequence",
+                "dual_audience_summary",
             ]:
                 if field not in seq:
                     failures.append(f"book_sequence_report.json missing {field}")
@@ -1819,6 +1843,18 @@ class BookforgePipeline:
                     failures.append(f"character_commercial_report.json missing {field}")
         else:
             warnings.append("Missing review/character_commercial_report.json")
+
+        dual_audience_enabled = bool((json.loads((review_dir / "production_report.json").read_text(encoding="utf-8")) if (review_dir / "production_report.json").exists() else {}).get("dual_audience", {}).get("enabled", True))
+        dual_audience_report_path = review_dir / "dual_audience_report.json"
+        if dual_audience_report_path.exists():
+            payload = json.loads(dual_audience_report_path.read_text(encoding="utf-8"))
+            for field in ["enabled", "summary_score", "child_channel_summary_score", "adult_channel_summary_score", "balance_summary_score", "strongest_pages", "weakest_pages", "child_confusion_risk_pages", "adult_flatness_risk_pages", "imbalance_pages", "positive_notes", "warnings", "limitations"]:
+                if field not in payload:
+                    failures.append(f"dual_audience_report.json missing {field}")
+        elif dual_audience_enabled:
+            failures.append("Missing review/dual_audience_report.json while dual-audience feature is enabled")
+        else:
+            warnings.append("Missing review/dual_audience_report.json (disabled by feature flag)")
 
         hidden_world_report_path = review_dir / "hidden_world_report.json"
         if hidden_world_report_path.exists():
