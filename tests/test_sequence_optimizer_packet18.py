@@ -148,4 +148,4 @@ def test_apply_and_report_schema_and_verify_expectations(tmp_path, monkeypatch):
         assert k in payload
 
     required = BookforgePipeline()._expected_package_artifacts()
-    assert "review/sequence_optimization_report.json" in required
+    assert "review/book_quality_report.json" in required

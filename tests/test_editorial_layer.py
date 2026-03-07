@@ -143,6 +143,8 @@ def test_verify_warns_not_fails_when_editorial_missing(tmp_path: Path):
         if path.suffix == ".json":
             if path.name == "preflight_report.json":
                 payload = {"status": "PASS"}
+            elif path.name == "book_quality_report.json":
+                payload = {"schema_version": "1.0", "generated_at": "2024-01-01T00:00:00Z", "artifact": "book_quality_report.json", "summary_scores": {"overall_sequence_score": 0.5, "color_flow_summary_score": 0.5, "architecture_flow_summary_score": 0.5, "energy_curve_summary_score": 0.5}, "warnings": [], "limitations": [], "per_page_notes": [], "sequence_findings": {}, "actions_taken": {}, "legacy_artifacts": {}}
             elif path.name == "book_sequence_report.json":
                 payload = {"overall_sequence_score": 0.9, "color_flow_summary_score": 0.9, "architecture_flow_summary_score": 0.9, "energy_curve_summary_score": 0.9, "weak_clusters": [], "saliency_flow_sequence": {}, "dual_audience_summary": {}}
             elif path.name == "layout_search_report.json":

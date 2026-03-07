@@ -102,4 +102,4 @@ def test_look_inside_window_and_artifact_generation(tmp_path: Path):
 
 def test_pipeline_expected_artifacts_include_storefront_report():
     required = BookforgePipeline()._expected_package_artifacts()
-    assert "review/storefront_optimization_report.json" in required
+    assert "review/book_quality_report.json" in required
