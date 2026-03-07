@@ -842,6 +842,11 @@ class BookforgePipeline:
             )
 
         prompt_contract = build_prompt_contract(parsed, lock, spread_pairs=lock.get("spreads", {}).get("pairs", []), planning_guidance=planning_prompt_guidance)
+        prompt_metadata_by_page = {
+            int(obj.get("page_number", 0)): (obj.get("metadata", {}) if isinstance(obj.get("metadata", {}), dict) else {})
+            for obj in prompt_contract.get("objects", [])
+            if isinstance(obj, dict) and int(obj.get("page_number", 0)) > 0
+        }
 
         checkpoint_pages = int(lock.get("checkpoint", {}).get("pages", 0))
         check_file = out / "CHECKPOINT.json"
@@ -912,6 +917,7 @@ class BookforgePipeline:
                 architecture_variant=architecture_by_page.get(no),
                 age_range=str(lock.get("editorial", {}).get("age_band", "")),
                 shot_plan_entry=camera_by_page.get(no),
+                prompt_metadata=prompt_metadata_by_page.get(no),
             )
             qa_attempts.append({"page": no, "attempt": 1, **qa})
             rounds = 0
@@ -940,6 +946,7 @@ class BookforgePipeline:
                     architecture_variant=architecture_by_page.get(no),
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
                     shot_plan_entry=camera_by_page.get(no),
+                    prompt_metadata=prompt_metadata_by_page.get(no),
                 )
                 if qa.get("best", {}).get("focus_bleed_overlap", 0.0) > lock["qa"].get("max_focus_bleed_overlap", 0.15):
                     hard_prompt = f"{hard_prompt} subject centered within safe area, keep key action away from edges"
@@ -998,6 +1005,7 @@ class BookforgePipeline:
                     architecture_variant=architecture_by_page.get(a),
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
                     shot_plan_entry=camera_by_page.get(a),
+                    prompt_metadata=prompt_metadata_by_page.get(a),
                 )
                 qa_attempts.append({"page": f"{a}-{b}", "attempt": spread_round, "spread": True, **spread_qa})
                 if not spread_qa["passes"]:
@@ -1015,6 +1023,7 @@ class BookforgePipeline:
                     architecture_variant=architecture_by_page.get(a),
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
                     shot_plan_entry=camera_by_page.get(a),
+                    prompt_metadata=prompt_metadata_by_page.get(a),
                 )
                 right_best, right_qa = choose_best_variant(
                     [Path(selected[b - 1])],
@@ -1028,6 +1037,7 @@ class BookforgePipeline:
                     architecture_variant=architecture_by_page.get(b),
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
                     shot_plan_entry=camera_by_page.get(b),
+                    prompt_metadata=prompt_metadata_by_page.get(b),
                 )
                 qa_attempts.append({"page": a, "attempt": spread_round, "spread_half": "left", **left_qa})
                 qa_attempts.append({"page": b, "attempt": spread_round, "spread_half": "right", **right_qa})
@@ -1280,6 +1290,7 @@ class BookforgePipeline:
                     architecture_variant=architecture_by_page.get(page_no),
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
                     shot_plan_entry=camera_by_page.get(page_no),
+                    prompt_metadata=prompt_metadata_by_page.get(page_no),
                 )
                 generated_candidates[page_no] = regen_qa.get("best", {})
 
@@ -1432,6 +1443,7 @@ class BookforgePipeline:
                 "architecture_flow_summary_score",
                 "energy_curve_summary_score",
                 "weak_clusters",
+                "saliency_flow_sequence",
             ]:
                 if field not in seq:
                     failures.append(f"book_sequence_report.json missing {field}")

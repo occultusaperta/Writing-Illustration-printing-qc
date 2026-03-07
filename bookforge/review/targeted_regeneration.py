@@ -97,6 +97,8 @@ def _weak_dimensions(candidate: Dict[str, Any]) -> List[str]:
         dims.append("visual_ensemble")
     if float(((metadata.get("page_architecture_score") or {}).get("composite_score", 1.0)) or 1.0) < 0.65:
         dims.append("architecture")
+    if float(((metadata.get("saliency_flow_score") or {}).get("composite_score", 1.0)) or 1.0) < 0.45:
+        dims.append("saliency_flow")
     overlap = float(candidate.get("focus_bleed_overlap", 0.0) or 0.0)
     if overlap > 0.16:
         dims.append("layout_conflict")
