@@ -5,6 +5,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from bookforge.typography.storyweaver import extract_storyweaver_typography_directives
+
 PAGE_HEADER_RE = re.compile(r"^\[Pages?\s+(\d+)(?:\s*[\-\u2013\u2014]\s*(\d+))?\](.*)$", re.IGNORECASE)
 BLOCK_HEADER_RE = re.compile(r"^\[(Pages?\s+\d+(?:\s*[\-\u2013\u2014]\s*\d+)?|Back Endpaper)\]\s*(.*)$", re.IGNORECASE)
 ILLUSTRATION_RE = re.compile(r"\[ILLUSTRATION NOTE:(.*?)\]", re.IGNORECASE | re.DOTALL)
@@ -43,18 +45,18 @@ def detect_storyweaver_format(text: str) -> bool:
 
 
 def _extract_typography(printed_markdown: str, illustration_notes: str) -> List[Dict[str, Any]]:
-    directives: List[Dict[str, Any]] = []
-    for line in printed_markdown.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("# "):
-            directives.append({"type": "display_word", "text": stripped[2:].strip(), "scale": "huge", "placement": "bottom_third_if_spread_else_panel"})
-        if "&nbsp;" in line or re.search(r"\b\w\s{2,}\w", line):
-            directives.append({"type": "spaced_words", "raw_fragment": line.rstrip()})
-    note = illustration_notes.lower()
-    if "typography" in note and "spaced across" in note:
-        directives.append({"type": "spaced_words", "raw_fragment": illustration_notes.strip()})
-    if "word 'sleep'" in note or 'word "sleep"' in note:
-        directives.append({"type": "micro_word", "text": "sleep", "style": "tiny_drift_down"})
+    directives = []
+    for d in extract_storyweaver_typography_directives(printed_markdown, illustration_notes):
+        row = d.__dict__.copy()
+        role = str(row.get("role", ""))
+        compat_type = {
+            "title_dramatic": "display_word",
+            "pause_gap": "spaced_words",
+            "whisper": "micro_word",
+            "sound_effect": "display_word",
+        }.get(role, role or "body")
+        row.setdefault("type", compat_type)
+        directives.append(row)
     return directives
 
 

@@ -7,6 +7,9 @@ import tempfile
 import numpy as np
 from typing import Any, Dict, List, Tuple
 
+from bookforge.typography import PageTypographyPlan
+from bookforge.typography.rendering import draw_typography_plan
+
 from PIL import Image, ImageFilter
 from reportlab.lib.colors import black, white
 from reportlab.lib.styles import ParagraphStyle
@@ -308,7 +311,95 @@ class PDFLayoutEngine:
 
                 para.drawOn(c, panel_x + layout_preset["panel_padding_pt"], panel_y + panel_h - layout_preset["panel_padding_pt"] - needed_h)
             directives = page.get("typography_directives", []) if isinstance(page, dict) else []
-            if isinstance(directives, list) and directives:
+            typography_plan_payload = page.get("typography_plan") if isinstance(page, dict) else None
+            typography_render_meta: Dict[str, Any] = {"overlay_count": 0, "fallback_used": False, "style_roles": []}
+            if isinstance(typography_plan_payload, dict):
+                try:
+                    plan = PageTypographyPlan(
+                        page_number=int(typography_plan_payload.get("page_number", page_no)),
+                        source_markdown=str(typography_plan_payload.get("source_markdown", "")),
+                        text_zone=typography_plan_payload.get("text_zone", {"x": 0.08, "y": 0.06, "w": 0.84, "h": 0.22}),
+                        alignment=str(typography_plan_payload.get("alignment", "left")),
+                        preferred_region=str(typography_plan_payload.get("preferred_region", "lower_safe")),
+                        body_scale_class=str(typography_plan_payload.get("body_scale_class", "body")),
+                        style_roles=[str(x) for x in typography_plan_payload.get("style_roles", [])],
+                        lines=[],
+                        directives=[],
+                        quietness_requirement=float(typography_plan_payload.get("quietness_requirement", 0.5) or 0.5),
+                        contrast_requirement=float(typography_plan_payload.get("contrast_requirement", 0.65) or 0.65),
+                        overflow_expected=bool(typography_plan_payload.get("overflow_expected", False)),
+                        special_positioning_mode=str(typography_plan_payload.get("special_positioning_mode", "anchored")),
+                        warnings=[str(x) for x in typography_plan_payload.get("warnings", [])],
+                        notes=[str(x) for x in typography_plan_payload.get("notes", [])],
+                    )
+                    line_rows = typography_plan_payload.get("lines", []) if isinstance(typography_plan_payload.get("lines", []), list) else []
+                    directive_rows = typography_plan_payload.get("directives", []) if isinstance(typography_plan_payload.get("directives", []), list) else []
+                    from bookforge.typography.types import TypographyDirective, TypographyLinePlan, TypographySpan
+
+                    lines = []
+                    for row in line_rows:
+                        if not isinstance(row, dict):
+                            continue
+                        spans = []
+                        for sp in row.get("spans", []) if isinstance(row.get("spans", []), list) else []:
+                            if not isinstance(sp, dict):
+                                continue
+                            spans.append(TypographySpan(
+                                text=str(sp.get("text", "")),
+                                role=str(sp.get("role", "body")),
+                                emphasis=float(sp.get("emphasis", 0.4) or 0.4),
+                                scale_class=str(sp.get("scale_class", "body")),
+                                weight_class=str(sp.get("weight_class", "regular")),
+                                directional_drift=str(sp.get("directional_drift", "none")),
+                                preserve_exact_text=bool(sp.get("preserve_exact_text", True)),
+                            ))
+                        lines.append(TypographyLinePlan(
+                            line_text=str(row.get("line_text", "")),
+                            role=str(row.get("role", "body")),
+                            alignment=str(row.get("alignment", "left")),
+                            scale_class=str(row.get("scale_class", "body")),
+                            weight_class=str(row.get("weight_class", "regular")),
+                            line_gap_multiplier=float(row.get("line_gap_multiplier", 1.0) or 1.0),
+                            spans=spans,
+                        ))
+                    plan = PageTypographyPlan(
+                        page_number=plan.page_number,
+                        source_markdown=plan.source_markdown,
+                        text_zone=plan.text_zone,
+                        alignment=plan.alignment,
+                        preferred_region=plan.preferred_region,
+                        body_scale_class=plan.body_scale_class,
+                        style_roles=plan.style_roles,
+                        lines=lines,
+                        directives=[TypographyDirective(
+                            kind=str(d.get("kind", "")),
+                            text=str(d.get("text", "")),
+                            role=str(d.get("role", "body")),
+                            line_index=int(d.get("line_index", 0) or 0),
+                            strength=float(d.get("strength", 0.5) or 0.5),
+                            metadata=d.get("metadata", {}) if isinstance(d.get("metadata", {}), dict) else {},
+                        ) for d in directive_rows if isinstance(d, dict)],
+                        quietness_requirement=plan.quietness_requirement,
+                        contrast_requirement=plan.contrast_requirement,
+                        overflow_expected=plan.overflow_expected,
+                        special_positioning_mode=plan.special_positioning_mode,
+                        warnings=plan.warnings,
+                        notes=plan.notes,
+                    )
+                    typography_render_meta = draw_typography_plan(
+                        c,
+                        plan=plan,
+                        font_name=self.font_name,
+                        page_w=page_w,
+                        safe_x=safe_x,
+                        safe_y=safe_y,
+                        safe_w=safe_w,
+                        safe_h=safe_h,
+                        base_font_size=font_size,
+                    )
+                except Exception:
+                    typography_render_meta["fallback_used"] = True
+            if typography_render_meta.get("fallback_used", False) and isinstance(directives, list) and directives:
                 self._draw_typography_overlays(c, directives, page_w, page_h, safe_x, safe_y, safe_w, safe_h)
             if layout_preset["show_page_numbers"]:
                 c.setFillColor(black)
@@ -323,6 +414,9 @@ class PDFLayoutEngine:
                     "suppress_body_text": bool(arch.get("suppress_body_text", False)) if isinstance(arch, dict) else False,
                     "gutter_safe_applied": bool(arch.get("gutter_safe_applied", False)) if isinstance(arch, dict) else False,
                     "layout_fallback_reason": layout_fallback or (arch.get("layout_fallback_reason", "") if isinstance(arch, dict) else ""),
+                    "typography_overlay_count": int(typography_render_meta.get("overlay_count", 0) or 0),
+                    "typography_render_fallback": bool(typography_render_meta.get("fallback_used", False)),
+                    "typography_style_roles": typography_render_meta.get("style_roles", []),
                 }
             )
             c.showPage()
