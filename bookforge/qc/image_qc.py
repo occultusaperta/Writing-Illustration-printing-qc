@@ -13,6 +13,7 @@ from bookforge.color_script.postprocess import apply_color_postprocess
 from bookforge.color_script.scoring import score_candidate_image_colors
 from bookforge.qc.gpu_batch_scoring import gpu_batch_scoring_enabled, score_candidate_batch
 from bookforge.qc.ensemble_visual import evaluate_visual_ensemble
+from bookforge.camera_language.scoring import score_shot_adherence
 from bookforge.qc.print_qc import analyze_print_qc, print_qc_warnings
 from bookforge.qc.visual_integrity import (
     border_artifact_score,
@@ -143,6 +144,7 @@ def choose_best_variant(
     page_text: str = "",
     architecture_variant: Dict[str, Any] | None = None,
     age_range: str | None = None,
+    shot_plan_entry: Dict[str, Any] | None = None,
 ) -> Tuple[Path, Dict[str, Any]]:
     batch_scores: Dict[str, Dict[str, float]] = {}
     if gpu_batch_scoring_enabled():
@@ -194,6 +196,10 @@ def choose_best_variant(
             )
             metadata["page_architecture_score"] = arch_score.to_dict()
 
+        shot_score = score_shot_adherence(report, shot_plan_entry)
+        if shot_score is not None:
+            metadata["shot_adherence_score"] = shot_score.to_dict()
+
     scored = sorted(
         reports,
         key=lambda r: (
@@ -203,6 +209,7 @@ def choose_best_variant(
             r["sharpness"] + r["contrast"] + r["entropy"] - 0.2 * max(0.0, 100 - r.get("brightness_p95", 100)) - 5.0 * r.get("out_of_gamut_risk", 0.0),
             (r.get("gpu_batch_scores") or {}).get("ranking_score", 0.0),
             ((r.get("metadata") or {}).get("page_architecture_score") or {}).get("composite_score", 0.0),
+            0.15 * (((r.get("metadata") or {}).get("shot_adherence_score") or {}).get("composite_score", 0.0)),
         ),
         reverse=True,
     )
