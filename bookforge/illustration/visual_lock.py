@@ -43,6 +43,9 @@ def normalize_visual_lock(lock: Dict[str, Any], parsed_story: Dict[str, Any] | N
             "cover": str(lock.get("approved_cover", visual.get("cover_reference", ""))),
             "palette_refs": _as_list(visual.get("palette_refs", [])),
         },
+        "locked_character_sheet": str(lock.get("approved_character", visual.get("character_reference", ""))),
+        "locked_palette": _as_list(lock.get("style_bible", {}).get("palette", [])),
+        "locked_line_style": str(lock.get("approved_style", visual.get("style_reference", ""))),
         "palette_lock": lock.get("style_bible", {}).get("palette", []),
         "lighting_lock": visual.get("lighting_lock", "soft cinematic child-safe keylight"),
         "composition_lock": visual.get("composition_lock", "clear focal subject; avoid clutter at trim-safe zones"),
@@ -82,6 +85,18 @@ def normalize_visual_lock(lock: Dict[str, Any], parsed_story: Dict[str, Any] | N
             "title_safe": True,
         },
         "nostalgia_background_motifs": _as_list(visual.get("nostalgia_background_motifs", [])),
+        "composition_guidance": {
+            "primary_subject": str(approval.get("primary_subject", "Mara")),
+            "secondary_subject": str(approval.get("secondary_subject", "Patch")),
+            "focal_zone": str(approval.get("focal_zone", "golden_ratio_top_left")),
+            "camera_height": str(approval.get("camera_height", "child_eye_level")),
+            "eye_flow_direction": str(approval.get("eye_flow_direction", "left_to_right")),
+        },
+        "character_proportions": {
+            "head_body_ratio": float(approval.get("head_body_ratio", 0.33)),
+            "eye_size_multiplier": float(approval.get("eye_size_multiplier", 1.25)),
+            "cheek_roundness": float(approval.get("cheek_roundness", 0.8)),
+        },
         "character_design_constraints": _as_list(visual.get("character_design_constraints", approval.get("character_design_constraints", []))),
         "manuscript_art_bible": {
             "child_perspective_camera_height": approval.get("child_perspective_camera_height", "eye-level"),
@@ -141,7 +156,7 @@ def validate_visual_lock(lock: Dict[str, Any], *, require_lock: bool = False) ->
 
 
 def ensure_reference_paths_exist(lock: Dict[str, Any]) -> None:
-    for key in ["approved_character", "approved_style", "approved_cover"]:
+    for key in ["approved_character", "approved_style", "approved_cover", "approved_character_reference", "approved_style_reference"]:
         path = lock.get(key)
         if path and not Path(path).exists():
             raise RuntimeError(f"LOCK reference missing: {key} -> {path}")

@@ -145,7 +145,7 @@ class FluxLocalServiceHandler(BaseHTTPRequestHandler):
             steps=int(payload.get("steps", 4)),
             guidance=float(payload.get("guidance", 2.5)) if payload.get("guidance") is not None else None,
             quality_preset=str(payload.get("quality_preset", "draft")),
-            references=[str(x) for x in (payload.get("references") or [])],
+            references=[str(x) for x in (payload.get("references") or payload.get("reference_images") or [])],
             lora_slots=payload.get("lora_slots") or [],
             spread=payload.get("spread") or {},
             variant_count=int(payload.get("variant_count", 1)),
