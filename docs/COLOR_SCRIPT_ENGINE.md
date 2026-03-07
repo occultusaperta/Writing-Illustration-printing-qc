@@ -28,3 +28,32 @@ This packet adds the **planning spine** for CSE only.
 - Color scoring/reselection loops.
 - Postprocess tuning driven by color script.
 - Transition repair/re-planning during generation.
+
+## Color Script Engine Phase B — Image Scoring (Packet 3)
+
+Packet 3 adds additive candidate image scoring only (no ranking/reselection changes yet).
+
+### What is evaluated per candidate image
+- CIELAB extraction and global color profile metrics:
+  - measured lightness
+  - measured chroma
+  - measured temperature proxy
+  - measured contrast
+- Dominant color extraction via k-means (k=5), top-3 dominant LAB colors retained.
+- Palette adherence scoring using ΔE2000 against allowed palette colors.
+- Emotional target adherence scoring against per-page targets:
+  - lightness/chroma/temperature/contrast
+  - dominant color match
+- Forbidden color contamination scoring using ΔE2000 against forbidden page colors.
+
+### Composite score and disposition
+- Composite score is weighted across all individual color metrics.
+- Disposition labels are produced for future packets:
+  - `ACCEPT`
+  - `POST_PROCESS`
+  - `REJECT`
+- `post_process_actions` are suggestion hints only in this packet.
+
+### Pipeline integration scope
+- Color scores are attached to candidate metadata (`candidate.metadata.color_score`) during candidate QA scoring.
+- Existing candidate ranking, reselection behavior, and post-processing logic are intentionally unchanged in Packet 3.
