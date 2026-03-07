@@ -115,6 +115,24 @@ def _load_color_scoring_context(out: Path) -> tuple[Dict[int, Dict[str, Any]], D
     return page_spec_by_page, master_palette if isinstance(master_palette, dict) else {}
 
 
+def _load_architecture_scoring_context(out: Path) -> Dict[int, Dict[str, Any]]:
+    planning_dir = out / "preprod" / "planning"
+    arch_plan = _load_json_if_exists(planning_dir / "architecture_plan.json") or []
+    if not isinstance(arch_plan, list) or not arch_plan:
+        return {}
+    variants = {v.variant_id: arch_to_primitive(v) for v in architecture_templates()}
+    page_to_variant: Dict[int, Dict[str, Any]] = {}
+    for item in arch_plan:
+        if not isinstance(item, dict):
+            continue
+        page_no = int(item.get("page_number", 0) or 0)
+        variant_id = str(item.get("selected_variant_id", ""))
+        variant = variants.get(variant_id)
+        if page_no > 0 and variant:
+            page_to_variant[page_no] = variant
+    return page_to_variant
+
+
 def _build_prompt_addendum(page: Dict[str, Any], turn: Dict[str, Any], artifact: Dict[str, Any], editorial_mode: bool) -> str:
     parts: List[str] = []
     if turn:
@@ -753,6 +771,7 @@ class BookforgePipeline:
         prompts = []
         planning_prompt_guidance = _build_planning_prompt_guidance(out)
         color_spec_by_page, master_palette = _load_color_scoring_context(out)
+        architecture_by_page = _load_architecture_scoring_context(out)
         _studio_debug("studio start: building prompts")
         turn_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("page_turn_map", []) if isinstance(x, dict)}
         artifact_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("resolved_artifacts_map", []) if isinstance(x, dict)}
@@ -843,6 +862,9 @@ class BookforgePipeline:
                 page_number=no,
                 page_color_spec=color_spec_by_page.get(no),
                 master_palette=master_palette,
+                page_text=str(page.get("text", "")),
+                architecture_variant=architecture_by_page.get(no),
+                age_range=str(lock.get("editorial", {}).get("age_band", "")),
             )
             qa_attempts.append({"page": no, "attempt": 1, **qa})
             rounds = 0
@@ -867,6 +889,9 @@ class BookforgePipeline:
                     page_number=no,
                     page_color_spec=color_spec_by_page.get(no),
                     master_palette=master_palette,
+                    page_text=str(page.get("text", "")),
+                    architecture_variant=architecture_by_page.get(no),
+                    age_range=str(lock.get("editorial", {}).get("age_band", "")),
                 )
                 if qa.get("best", {}).get("focus_bleed_overlap", 0.0) > lock["qa"].get("max_focus_bleed_overlap", 0.15):
                     hard_prompt = f"{hard_prompt} subject centered within safe area, keep key action away from edges"
@@ -921,6 +946,9 @@ class BookforgePipeline:
                     page_number=a,
                     page_color_spec=color_spec_by_page.get(a),
                     master_palette=master_palette,
+                    page_text=str(parsed["pages"][a - 1].get("text", "")) if a - 1 < len(parsed["pages"]) else "",
+                    architecture_variant=architecture_by_page.get(a),
+                    age_range=str(lock.get("editorial", {}).get("age_band", "")),
                 )
                 qa_attempts.append({"page": f"{a}-{b}", "attempt": spread_round, "spread": True, **spread_qa})
                 if not spread_qa["passes"]:
@@ -934,6 +962,9 @@ class BookforgePipeline:
                     page_number=a,
                     page_color_spec=color_spec_by_page.get(a),
                     master_palette=master_palette,
+                    page_text=str(parsed["pages"][a - 1].get("text", "")) if a - 1 < len(parsed["pages"]) else "",
+                    architecture_variant=architecture_by_page.get(a),
+                    age_range=str(lock.get("editorial", {}).get("age_band", "")),
                 )
                 right_best, right_qa = choose_best_variant(
                     [Path(selected[b - 1])],
@@ -943,6 +974,9 @@ class BookforgePipeline:
                     page_number=b,
                     page_color_spec=color_spec_by_page.get(b),
                     master_palette=master_palette,
+                    page_text=str(parsed["pages"][b - 1].get("text", "")) if b - 1 < len(parsed["pages"]) else "",
+                    architecture_variant=architecture_by_page.get(b),
+                    age_range=str(lock.get("editorial", {}).get("age_band", "")),
                 )
                 qa_attempts.append({"page": a, "attempt": spread_round, "spread_half": "left", **left_qa})
                 qa_attempts.append({"page": b, "attempt": spread_round, "spread_half": "right", **right_qa})
@@ -968,6 +1002,23 @@ class BookforgePipeline:
         (out / "preflight_report.json").write_text(json.dumps(preflight, indent=2), encoding="utf-8")
 
         review = out / "review"
+        architecture_review = []
+        for attempt in qa_attempts:
+            best = attempt.get("best", {}) if isinstance(attempt, dict) else {}
+            metadata = best.get("metadata", {}) if isinstance(best, dict) else {}
+            arch = metadata.get("page_architecture_score") if isinstance(metadata, dict) else None
+            if arch:
+                architecture_review.append(
+                    {
+                        "page": attempt.get("page"),
+                        "attempt": attempt.get("attempt"),
+                        "variant_path": best.get("path", ""),
+                        "architecture_score": arch,
+                    }
+                )
+        if architecture_review:
+            review.mkdir(parents=True, exist_ok=True)
+            (review / "page_architecture_scores.json").write_text(json.dumps(architecture_review, indent=2), encoding="utf-8")
         generate_contact_sheet([Path(p) for p in selected], review / "contact_sheet.pdf")
         cache_hits = generated.get("cache_hits", {})
         cache_keys = generated.get("cache_keys", {})
