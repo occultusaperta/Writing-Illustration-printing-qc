@@ -17,6 +17,7 @@ from bookforge.qc.ensemble_visual import evaluate_visual_ensemble
 from bookforge.camera_language.scoring import score_shot_adherence
 from bookforge.saliency_flow import score_saliency_flow
 from bookforge.hidden_world import score_hidden_world_adherence
+from bookforge.character_scoring import score_character_commercial
 from bookforge.qc.print_qc import analyze_print_qc, print_qc_warnings
 from bookforge.qc.visual_integrity import (
     border_artifact_score,
@@ -152,6 +153,7 @@ def choose_best_variant(
     hidden_world_guidance: Dict[str, Any] | None = None,
     illustration_notes: str = "",
 ) -> Tuple[Path, Dict[str, Any]]:
+    character_commercial_enabled = str(os.getenv("BOOKFORGE_CHARACTER_COMMERCIAL_SCORING", "true")).strip().lower() in {"1", "true", "yes", "on"}
     saliency_flow_enabled = str(os.getenv("BOOKFORGE_SALIENCY_FLOW", "true")).strip().lower() in {"1", "true", "yes", "on"}
     batch_scores: Dict[str, Dict[str, float]] = {}
     if gpu_batch_scoring_enabled():
@@ -225,6 +227,20 @@ def choose_best_variant(
             illustration_notes=illustration_notes,
         )
         metadata["hidden_world_score"] = hidden_world_score.to_dict()
+        if character_commercial_enabled:
+            try:
+                commercial_score = score_character_commercial(report["path"])
+                metadata["baby_schema_score"] = commercial_score.baby_schema.to_dict()
+                metadata["toyetic_score"] = commercial_score.toyetic.to_dict()
+                metadata["silhouette_score"] = commercial_score.silhouette.to_dict()
+                metadata["character_commercial_score"] = commercial_score.to_dict()
+            except Exception as exc:
+                metadata["character_commercial_score"] = {
+                    "composite_score": 0.0,
+                    "confidence": 0.0,
+                    "warnings": [f"Character commercial scoring unavailable: {exc}"],
+                    "notes": ["Scoring skipped due to bounded safe no-op behavior."],
+                }
 
     scored = sorted(
         reports,
@@ -237,6 +253,7 @@ def choose_best_variant(
             ((r.get("metadata") or {}).get("page_architecture_score") or {}).get("composite_score", 0.0),
             0.15 * (((r.get("metadata") or {}).get("shot_adherence_score") or {}).get("composite_score", 0.0)),
             0.05 * (((r.get("metadata") or {}).get("saliency_flow_score") or {}).get("composite_score", 0.0)),
+            0.04 * (((r.get("metadata") or {}).get("character_commercial_score") or {}).get("composite_score", 0.0)),
         ),
         reverse=True,
     )

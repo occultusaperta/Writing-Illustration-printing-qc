@@ -71,6 +71,7 @@ from bookforge.review.targeted_regeneration import (
 )
 from bookforge.story.back_matter import generate_blurb_options
 from bookforge.storefront import build_storefront_optimization_report, score_cover_thumbnail, write_storefront_optimization_report
+from bookforge.character_scoring.sequence import build_character_commercial_report
 from bookforge.story.prompt_compiler import compile_prompt, tighten_prompt
 from bookforge.story.story_spec import build_bible_variants, parse_story
 from bookforge.story.storyboard import generate_storyboard
@@ -198,6 +199,10 @@ def _dynamic_typography_enabled() -> bool:
 
 def _storefront_optimization_enabled() -> bool:
     return _feature_flag("BOOKFORGE_STOREFRONT_OPTIMIZATION", default="true")
+
+
+def _character_commercial_scoring_enabled() -> bool:
+    return _feature_flag("BOOKFORGE_CHARACTER_COMMERCIAL_SCORING", default="true")
 
 
 def _build_typography_plans(
@@ -1229,7 +1234,7 @@ class BookforgePipeline:
         )[:5]
         cache_bools = [hit for arr in cache_hits.values() for hit in arr]
         cache_hit_rate = (sum(1 for x in cache_bools if x) / len(cache_bools)) if cache_bools else 0.0
-        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "hidden_world": {"enabled": _hidden_world_enabled(), "planned_pages": len(hidden_world_by_page)}, "storefront": {"enabled": _storefront_optimization_enabled()}, "applied_page_architecture": applied_arch_review}
+        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "hidden_world": {"enabled": _hidden_world_enabled(), "planned_pages": len(hidden_world_by_page)}, "storefront": {"enabled": _storefront_optimization_enabled()}, "character_commercial_scoring": {"enabled": _character_commercial_scoring_enabled()}, "applied_page_architecture": applied_arch_review}
         write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
         _studio_debug("running premium visual QC")
@@ -1289,8 +1294,19 @@ class BookforgePipeline:
                 if isinstance(p, dict)
             ],
             hidden_world_plan=(_load_json_if_exists(out / "preprod" / "planning" / "hidden_world_plan.json") if _hidden_world_enabled() else {}),
+            character_commercial_report=build_character_commercial_report(
+                page_count=len(parsed.get("pages", [])),
+                qa_attempts=qa_attempts,
+                enabled=_character_commercial_scoring_enabled(),
+            ).to_dict(),
         )
         write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
+        character_commercial_report = build_character_commercial_report(
+            page_count=len(parsed.get("pages", [])),
+            qa_attempts=qa_attempts,
+            enabled=_character_commercial_scoring_enabled(),
+        )
+        (review / "character_commercial_report.json").write_text(json.dumps(character_commercial_report.to_dict(), indent=2), encoding="utf-8")
         hidden_world_plan_payload = _load_json_if_exists(out / "preprod" / "planning" / "hidden_world_plan.json") if _hidden_world_enabled() else {}
         hidden_world_finding = build_hidden_world_sequence_finding(
             page_count=len(parsed.get("pages", [])),
@@ -1358,6 +1374,11 @@ class BookforgePipeline:
                         if isinstance(p, dict)
                     ],
                     hidden_world_plan=(_load_json_if_exists(out / "preprod" / "planning" / "hidden_world_plan.json") if _hidden_world_enabled() else {}),
+                    character_commercial_report=build_character_commercial_report(
+                        page_count=len(parsed.get("pages", [])),
+                        qa_attempts=qa_attempts,
+                        enabled=_character_commercial_scoring_enabled(),
+                    ).to_dict(),
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
@@ -1518,9 +1539,20 @@ class BookforgePipeline:
                         if isinstance(p, dict)
                     ],
                     hidden_world_plan=(_load_json_if_exists(out / "preprod" / "planning" / "hidden_world_plan.json") if _hidden_world_enabled() else {}),
+                    character_commercial_report=build_character_commercial_report(
+                        page_count=len(parsed.get("pages", [])),
+                        qa_attempts=qa_attempts,
+                        enabled=_character_commercial_scoring_enabled(),
+                    ).to_dict(),
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
+                character_commercial_report = build_character_commercial_report(
+                    page_count=len(parsed.get("pages", [])),
+                    qa_attempts=qa_attempts,
+                    enabled=_character_commercial_scoring_enabled(),
+                )
+                (review / "character_commercial_report.json").write_text(json.dumps(character_commercial_report.to_dict(), indent=2), encoding="utf-8")
                 (review / "typography_report.json").write_text(json.dumps(sequence_report.to_dict().get("typography_sequence", {}), indent=2), encoding="utf-8")
                 storefront_report = build_storefront_optimization_report(
                     selected=selected,
@@ -1593,6 +1625,7 @@ class BookforgePipeline:
             "review/targeted_regeneration_report.json",
             "review/hidden_world_report.json",
             "review/storefront_optimization_report.json",
+            "review/character_commercial_report.json",
             "review/report.html",
         ]
 
@@ -1679,6 +1712,16 @@ class BookforgePipeline:
                     failures.append(f"storefront_optimization_report.json missing {field}")
         else:
             warnings.append("Missing review/storefront_optimization_report.json")
+
+
+        character_report_path = review_dir / "character_commercial_report.json"
+        if character_report_path.exists():
+            character_report = json.loads(character_report_path.read_text(encoding="utf-8"))
+            for field in ["enabled", "summary_score", "lead_character_strength_summary", "weakest_pages", "strongest_pages", "limitations"]:
+                if field not in character_report:
+                    failures.append(f"character_commercial_report.json missing {field}")
+        else:
+            warnings.append("Missing review/character_commercial_report.json")
 
         hidden_world_report_path = review_dir / "hidden_world_report.json"
         if hidden_world_report_path.exists():
