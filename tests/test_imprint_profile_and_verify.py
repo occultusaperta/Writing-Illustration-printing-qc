@@ -103,6 +103,8 @@ def test_verify_command_missing_and_pass(tmp_path: Path):
                 payload = {"summary_score": 0.5, "warnings": []}
             elif path.name == "character_commercial_report.json":
                 payload = {"enabled": True, "summary_score": 0.5, "lead_character_strength_summary": "Moderate", "weakest_pages": [], "strongest_pages": [], "limitations": []}
+            elif path.name == "layout_search_report.json":
+                payload = {"summary": {}, "pages": []}
             else:
                 payload = {}
             path.write_text(json.dumps(payload), encoding="utf-8")

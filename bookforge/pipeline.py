@@ -72,6 +72,7 @@ from bookforge.review.targeted_regeneration import (
 from bookforge.story.back_matter import generate_blurb_options
 from bookforge.storefront import build_storefront_optimization_report, score_cover_thumbnail, write_storefront_optimization_report
 from bookforge.character_scoring.sequence import build_character_commercial_report
+from bookforge.layout_search import LayoutSearchConfig, build_layout_search_report, select_best_layout
 from bookforge.story.prompt_compiler import compile_prompt, tighten_prompt
 from bookforge.story.story_spec import build_bible_variants, parse_story
 from bookforge.story.storyboard import generate_storyboard
@@ -203,6 +204,10 @@ def _storefront_optimization_enabled() -> bool:
 
 def _character_commercial_scoring_enabled() -> bool:
     return _feature_flag("BOOKFORGE_CHARACTER_COMMERCIAL_SCORING", default="true")
+
+
+def _monte_carlo_layout_enabled() -> bool:
+    return _feature_flag("BOOKFORGE_MONTE_CARLO_LAYOUT", default="true")
 
 
 def _build_typography_plans(
@@ -1186,6 +1191,59 @@ class BookforgePipeline:
         architecture_plan = _load_architecture_plan(out)
         variants_index = {v.variant_id: arch_to_primitive(v) for v in architecture_templates()}
         applied_architecture_layout = build_layout_application_map(parsed["pages"], architecture_plan, variants_index, spread_pairs)
+
+        layout_search_results: List[Dict[str, Any]] = []
+        if _monte_carlo_layout_enabled():
+            layout_cfg = LayoutSearchConfig(
+                max_permutations_per_page=int(lock.get("review", {}).get("max_permutations_per_page", 8) or 8),
+                max_permutations_per_spread=int(lock.get("review", {}).get("max_permutations_per_spread", 12) or 12),
+                random_seed=int(lock.get("review", {}).get("layout_search_seed", _seed_from_lock(lock.get("title", ""), lock.get("author", ""), int(lock.get("approved_variant", 1)))) or 1337),
+                enable_crop_shift=bool(lock.get("review", {}).get("enable_crop_shift", True)),
+                enable_text_zone_variation=bool(lock.get("review", {}).get("enable_text_zone_variation", True)),
+                enable_variant_swap_within_architecture=bool(lock.get("review", {}).get("enable_variant_swap_within_architecture", True)),
+            )
+            spread_lookup = {a: b for a, b in spread_pairs}
+            processed: set[int] = set()
+            for page in parsed.get("pages", []):
+                page_no = int(page.get("page_number", 0) or 0)
+                if page_no <= 0 or page_no in processed:
+                    continue
+                mate = spread_lookup.get(page_no)
+                scope_pages = (page_no, mate) if mate else (page_no,)
+                result = select_best_layout(
+                    page_numbers=scope_pages,
+                    base_layout=applied_architecture_layout.get(page_no, {}),
+                    image_path=Path(selected[page_no - 1]),
+                    page_text=str(page.get("text", "")),
+                    config=layout_cfg,
+                    seed=layout_cfg.random_seed + page_no * 1009,
+                    is_spread=bool(mate),
+                    architecture_variants=variants_index,
+                )
+                layout_search_results.append(result.to_dict())
+                for pno in scope_pages:
+                    if pno in applied_architecture_layout:
+                        chosen = dict(result.selected_layout)
+                        chosen["layout_search_scope"] = result.scope
+                        chosen["layout_search_page_numbers"] = list(scope_pages)
+                        applied_architecture_layout[pno] = chosen
+                    processed.add(pno)
+
+            for page in parsed.get("pages", []):
+                page_no = int(page.get("page_number", 0) or 0)
+                tplan = page.get("typography_plan")
+                selected_row = applied_architecture_layout.get(page_no, {})
+                if isinstance(tplan, dict) and isinstance(selected_row.get("text_zone"), dict):
+                    tplan["text_zone"] = dict(selected_row.get("text_zone", tplan.get("text_zone", {})))
+
+        layout_search_report = build_layout_search_report([])
+        if layout_search_results:
+            from bookforge.layout_search.types import LayoutSearchResult
+
+            layout_search_report = build_layout_search_report([LayoutSearchResult(**row) for row in layout_search_results])
+        elif not _monte_carlo_layout_enabled():
+            layout_search_report = {"status": "DISABLED", "summary": {"notes": ["Monte Carlo layout exploration disabled."]}, "pages": []}
+
         layout_render_meta = engine.render_interior(parsed["pages"], selected, interior, size, self.bleed_in, self.safe_in, get_preset(lock["interior_layout_preset"], "interior"), get_preset(lock["typography_preset"], "typography"), lock.get("pdf", {}), spread_pairs=spread_pairs, architecture_layout=applied_architecture_layout)
         page_plan = {"declared_page_count": page_count, "actual_pages": len(parsed["pages"]), "spread_pairs": spread_pairs}
         (out / "page_plan.json").write_text(json.dumps(page_plan, indent=2), encoding="utf-8")
@@ -1219,6 +1277,7 @@ class BookforgePipeline:
         review.mkdir(parents=True, exist_ok=True)
         applied_arch_review = layout_render_meta.get("applied_page_architecture", []) if isinstance(layout_render_meta, dict) else []
         (review / "applied_page_architecture.json").write_text(json.dumps(applied_arch_review, indent=2), encoding="utf-8")
+        (review / "layout_search_report.json").write_text(json.dumps(layout_search_report, indent=2), encoding="utf-8")
         generate_contact_sheet([Path(p) for p in selected], review / "contact_sheet.pdf")
         cache_hits = generated.get("cache_hits", {})
         cache_keys = generated.get("cache_keys", {})
@@ -1234,7 +1293,7 @@ class BookforgePipeline:
         )[:5]
         cache_bools = [hit for arr in cache_hits.values() for hit in arr]
         cache_hit_rate = (sum(1 for x in cache_bools if x) / len(cache_bools)) if cache_bools else 0.0
-        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "hidden_world": {"enabled": _hidden_world_enabled(), "planned_pages": len(hidden_world_by_page)}, "storefront": {"enabled": _storefront_optimization_enabled()}, "character_commercial_scoring": {"enabled": _character_commercial_scoring_enabled()}, "applied_page_architecture": applied_arch_review}
+        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "hidden_world": {"enabled": _hidden_world_enabled(), "planned_pages": len(hidden_world_by_page)}, "storefront": {"enabled": _storefront_optimization_enabled()}, "character_commercial_scoring": {"enabled": _character_commercial_scoring_enabled()}, "layout_search": {"enabled": _monte_carlo_layout_enabled(), "entries": len(layout_search_results)}, "applied_page_architecture": applied_arch_review}
         write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
         _studio_debug("running premium visual QC")
@@ -1299,6 +1358,7 @@ class BookforgePipeline:
                 qa_attempts=qa_attempts,
                 enabled=_character_commercial_scoring_enabled(),
             ).to_dict(),
+            layout_search_report=layout_search_report,
         )
         write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
         character_commercial_report = build_character_commercial_report(
@@ -1379,6 +1439,7 @@ class BookforgePipeline:
                         qa_attempts=qa_attempts,
                         enabled=_character_commercial_scoring_enabled(),
                     ).to_dict(),
+                    layout_search_report=layout_search_report,
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
@@ -1544,6 +1605,7 @@ class BookforgePipeline:
                         qa_attempts=qa_attempts,
                         enabled=_character_commercial_scoring_enabled(),
                     ).to_dict(),
+                    layout_search_report=layout_search_report,
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
@@ -1620,6 +1682,7 @@ class BookforgePipeline:
             "review/qa_report.json",
             "review/visual_critic_report.json",
             "review/book_sequence_report.json",
+            "review/layout_search_report.json",
             "review/typography_report.json",
             "review/reselection_report.json",
             "review/targeted_regeneration_report.json",
@@ -1680,6 +1743,15 @@ class BookforgePipeline:
 
         if not (review_dir / "editorial_report.md").exists():
             warnings.append("Missing review/editorial_report.md")
+        layout_search_report_path = review_dir / "layout_search_report.json"
+        if layout_search_report_path.exists():
+            lsr = json.loads(layout_search_report_path.read_text(encoding="utf-8"))
+            for field in ["summary", "pages"]:
+                if field not in lsr:
+                    failures.append(f"layout_search_report.json missing {field}")
+        else:
+            warnings.append("Missing review/layout_search_report.json")
+
         sequence_report_path = review_dir / "book_sequence_report.json"
         if sequence_report_path.exists():
             seq = json.loads(sequence_report_path.read_text(encoding="utf-8"))
