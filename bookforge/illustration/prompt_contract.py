@@ -30,6 +30,10 @@ def build_prompt_object(
     anti_drift_reference: str = "",
     width: int = 1024,
     height: int = 1024,
+    color_script_guidance: Dict[str, Any] | None = None,
+    page_architecture_guidance: Dict[str, Any] | None = None,
+    planning_prompt_lines: List[str] | None = None,
+    planning_negative_lines: List[str] | None = None,
 ) -> Dict[str, Any]:
     pvc = lock.get("premium_visual_contract", {})
     composition_guidance = pvc.get("composition_guidance", {}) if isinstance(pvc.get("composition_guidance", {}), dict) else {}
@@ -73,6 +77,7 @@ def build_prompt_object(
         *[f"Lens/framing: {x}" for x in pvc.get("lens_framing_cues", [])],
         *[f"Texture/finish: {x}" for x in pvc.get("texture_finish_cues", [])],
         *[f"Character proportion hint: {k}={v}" for k, v in character_proportions.items()],
+        *[str(x).strip() for x in (planning_prompt_lines or []) if str(x).strip()],
     ]
 
     flexible = [
@@ -82,6 +87,7 @@ def build_prompt_object(
 
     seed = int(lock.get("seeds", {}).get("per_page_seed", {}).get(str(page_number), 0))
     negative_parts = pvc.get("negative_prompt_rules", []) or [lock.get("locked_negative_prompt", "")]
+    negative_parts.extend([str(x).strip() for x in (planning_negative_lines or []) if str(x).strip()])
 
     return {
         "page_number": page_number,
@@ -119,11 +125,18 @@ def build_prompt_object(
                 pvc.get("locked_character_sheet", pvc.get("character_reference_pack", {}).get("primary", "")),
                 pvc.get("locked_line_style", pvc.get("style_reference_pack", {}).get("primary", "")),
             ],
+            "color_script_guidance": color_script_guidance or {},
+            "page_architecture_guidance": page_architecture_guidance or {},
         },
     }
 
 
-def build_prompt_contract(parsed: Dict[str, Any], lock: Dict[str, Any], spread_pairs: List[List[int]] | None = None) -> Dict[str, Any]:
+def build_prompt_contract(
+    parsed: Dict[str, Any],
+    lock: Dict[str, Any],
+    spread_pairs: List[List[int]] | None = None,
+    planning_guidance: Dict[int, Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
     pages = parsed.get("pages", [])
     total = len(pages)
     spread_set = {tuple(pair) for pair in (spread_pairs or [])}
@@ -143,6 +156,7 @@ def build_prompt_contract(parsed: Dict[str, Any], lock: Dict[str, Any], spread_p
                 pair = [sp[0], sp[1]]
                 break
         anti_drift = f"Anti-drift: match approved variant {lock.get('approved_variant')} character silhouette, palette and lighting from lock."
+        page_guidance = (planning_guidance or {}).get(no, {}) if planning_guidance else {}
         objects.append(
             build_prompt_object(
                 page=p,
@@ -154,6 +168,10 @@ def build_prompt_contract(parsed: Dict[str, Any], lock: Dict[str, Any], spread_p
                 anti_drift_reference=anti_drift,
                 width=width,
                 height=height,
+                color_script_guidance=page_guidance.get("color_script_guidance", {}),
+                page_architecture_guidance=page_guidance.get("page_architecture_guidance", {}),
+                planning_prompt_lines=page_guidance.get("prompt_lines", []),
+                planning_negative_lines=page_guidance.get("negative_lines", []),
             )
         )
 
