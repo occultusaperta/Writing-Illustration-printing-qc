@@ -48,9 +48,10 @@ quality.
 3. **Test state leakage** — two test files used direct module assignment instead
    of `monkeypatch.setattr()`, causing FakeIll to leak across test runs. Fixed
    in a prior review.
-4. **Production report was read multiple times in verify()** — dual_audience
-   and page_turn_tension feature checks each independently parsed
-   `production_report.json`. Fixed in this review: now parsed once into `_prod`.
+4. **Production report was read multiple times in verify()** — dual_audience,
+   page_turn_tension, and readaloud_script feature checks each independently
+   parsed `production_report.json`. Fixed in this review: now parsed once into
+   `prod_data`.
 5. **Ensemble score computed but unused in variant selection** — `image_qc.py`
    computes `evaluate_visual_ensemble()` (composition 0.25, clarity 0.20,
    artifact 0.20, perceptual 0.20, texture 0.15) and stores it in metadata,
