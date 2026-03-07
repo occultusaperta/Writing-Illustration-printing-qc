@@ -57,6 +57,7 @@ from bookforge.review.contact_sheet import generate_contact_sheet
 from bookforge.review.html_report import generate_report as generate_html_report
 from bookforge.review.proof_pack import generate_proof_pack, write_production_report
 from bookforge.review.book_sequence import build_book_sequence_report, write_book_sequence_report
+from bookforge.review.book_quality import build_book_quality_report, validate_book_quality_report, write_book_quality_report
 from bookforge.dual_audience import build_dual_audience_report, write_dual_audience_report
 from bookforge.page_turn import build_page_turn_tension_report, write_page_turn_tension_report
 from bookforge.review.reselection import (
@@ -1709,6 +1710,7 @@ class BookforgePipeline:
             enabled=_dual_audience_enabled(),
         )
         write_dual_audience_report(review / "dual_audience_report.json", final_dual_audience_report)
+        write_book_quality_report(review / "book_quality_report.json", build_book_quality_report(review))
 
         preprod_editorial = out / "preprod" / "editorial"
         _copy_companion_to_review(out)
@@ -1750,24 +1752,18 @@ class BookforgePipeline:
             "review/production_report.json",
             "review/qa_report.json",
             "review/visual_critic_report.json",
-            "review/book_sequence_report.json",
-            "review/layout_search_report.json",
-            "review/typography_report.json",
-            "review/reselection_report.json",
-            "review/targeted_regeneration_report.json",
-            "review/sequence_optimization_report.json",
-            "review/hidden_world_report.json",
-            "review/storefront_optimization_report.json",
-            "review/character_commercial_report.json",
-            "review/dual_audience_report.json",
-            "review/page_turn_tension_report.json",
+            "review/book_quality_report.json",
             "review/report.html",
         ]
 
     def verify(self, out_dir: str) -> Dict[str, Any]:
         out = Path(out_dir)
         required = self._expected_package_artifacts() + ["review/thumbs"]
-        missing = [rel for rel in required if not (out / rel).exists()]
+        missing = [
+            rel
+            for rel in required
+            if not (out / rel).exists() and rel != "review/book_quality_report.json"
+        ]
         warnings: List[str] = []
         failures: List[str] = []
         if missing:
@@ -1815,19 +1811,9 @@ class BookforgePipeline:
 
         if not (review_dir / "editorial_report.md").exists():
             warnings.append("Missing review/editorial_report.md")
-        layout_search_report_path = review_dir / "layout_search_report.json"
-        if layout_search_report_path.exists():
-            lsr = json.loads(layout_search_report_path.read_text(encoding="utf-8"))
-            for field in ["summary", "pages"]:
-                if field not in lsr:
-                    failures.append(f"layout_search_report.json missing {field}")
-        else:
-            warnings.append("Missing review/layout_search_report.json")
-
-        sequence_report_path = review_dir / "book_sequence_report.json"
-        if sequence_report_path.exists():
-            seq = json.loads(sequence_report_path.read_text(encoding="utf-8"))
-            for field in [
+        legacy_artifacts = {
+            "layout_search_report.json": ["summary", "pages"],
+            "book_sequence_report.json": [
                 "overall_sequence_score",
                 "color_flow_summary_score",
                 "architecture_flow_summary_score",
@@ -1835,87 +1821,10 @@ class BookforgePipeline:
                 "weak_clusters",
                 "saliency_flow_sequence",
                 "dual_audience_summary",
-            ]:
-                if field not in seq:
-                    failures.append(f"book_sequence_report.json missing {field}")
-        else:
-            warnings.append("Missing review/book_sequence_report.json")
-        reselection_report_path = review_dir / "reselection_report.json"
-        if reselection_report_path.exists():
-            reselection = json.loads(reselection_report_path.read_text(encoding="utf-8"))
-            for field in ["config", "considered_pages", "eligible_pages", "replaced_pages", "decisions", "sequence_improvement"]:
-                if field not in reselection:
-                    failures.append(f"reselection_report.json missing {field}")
-        else:
-            warnings.append("Missing review/reselection_report.json")
-        targeted_regen_report_path = review_dir / "targeted_regeneration_report.json"
-        storefront_report_path = review_dir / "storefront_optimization_report.json"
-        if storefront_report_path.exists():
-            storefront = json.loads(storefront_report_path.read_text(encoding="utf-8"))
-            for field in ["enabled", "look_inside", "first_pages_strength_score", "summary_score", "limitations"]:
-                if field not in storefront:
-                    failures.append(f"storefront_optimization_report.json missing {field}")
-        else:
-            warnings.append("Missing review/storefront_optimization_report.json")
-
-
-        character_report_path = review_dir / "character_commercial_report.json"
-        if character_report_path.exists():
-            character_report = json.loads(character_report_path.read_text(encoding="utf-8"))
-            for field in ["enabled", "summary_score", "lead_character_strength_summary", "weakest_pages", "strongest_pages", "limitations"]:
-                if field not in character_report:
-                    failures.append(f"character_commercial_report.json missing {field}")
-        else:
-            warnings.append("Missing review/character_commercial_report.json")
-
-        dual_audience_enabled = bool((json.loads((review_dir / "production_report.json").read_text(encoding="utf-8")) if (review_dir / "production_report.json").exists() else {}).get("dual_audience", {}).get("enabled", True))
-        page_turn_tension_enabled = bool((json.loads((review_dir / "production_report.json").read_text(encoding="utf-8")) if (review_dir / "production_report.json").exists() else {}).get("page_turn_tension", {}).get("enabled", True))
-        dual_audience_report_path = review_dir / "dual_audience_report.json"
-        if dual_audience_report_path.exists():
-            payload = json.loads(dual_audience_report_path.read_text(encoding="utf-8"))
-            for field in ["enabled", "summary_score", "child_channel_summary_score", "adult_channel_summary_score", "balance_summary_score", "strongest_pages", "weakest_pages", "child_confusion_risk_pages", "adult_flatness_risk_pages", "imbalance_pages", "positive_notes", "warnings", "limitations"]:
-                if field not in payload:
-                    failures.append(f"dual_audience_report.json missing {field}")
-        elif dual_audience_enabled:
-            failures.append("Missing review/dual_audience_report.json while dual-audience feature is enabled")
-        else:
-            warnings.append("Missing review/dual_audience_report.json (disabled by feature flag)")
-
-        page_turn_tension_report_path = review_dir / "page_turn_tension_report.json"
-        if page_turn_tension_report_path.exists():
-            payload = json.loads(page_turn_tension_report_path.read_text(encoding="utf-8"))
-            required_fields = ["enabled", "summary_score", "weak_turn_runs", "leftward_resistance_runs", "over_resolved_turns", "strong_turn_pages", "warnings", "positive_notes", "limitations", "findings"]
-            missing_fields = [field for field in required_fields if field not in payload]
-            if missing_fields and page_turn_tension_enabled:
-                for field in missing_fields:
-                    failures.append(f"page_turn_tension_report.json missing {field}")
-            elif missing_fields:
-                warnings.append("page_turn_tension_report.json present but partial while feature is disabled")
-        elif page_turn_tension_enabled:
-            failures.append("Missing review/page_turn_tension_report.json while page-turn tension feature is enabled")
-        else:
-            warnings.append("Missing review/page_turn_tension_report.json (disabled by feature flag)")
-
-        hidden_world_report_path = review_dir / "hidden_world_report.json"
-        if hidden_world_report_path.exists():
-            payload = json.loads(hidden_world_report_path.read_text(encoding="utf-8"))
-            for field in ["summary_score", "warnings"]:
-                if field not in payload:
-                    failures.append(f"hidden_world_report.json missing {field}")
-        else:
-            warnings.append("Missing review/hidden_world_report.json")
-
-        if targeted_regen_report_path.exists():
-            targeted_regen = json.loads(targeted_regen_report_path.read_text(encoding="utf-8"))
-            for field in ["enabled", "config", "eligible_targets", "decisions", "sequence_improvement"]:
-                if field not in targeted_regen:
-                    failures.append(f"targeted_regeneration_report.json missing {field}")
-        else:
-            warnings.append("Missing review/targeted_regeneration_report.json")
-        sequence_optimizer_report_path = review_dir / "sequence_optimization_report.json"
-        if sequence_optimizer_report_path.exists():
-            sequence_opt = json.loads(sequence_optimizer_report_path.read_text(encoding="utf-8"))
-            for field in [
+            ],
+            "reselection_report.json": ["config", "considered_pages", "eligible_pages", "replaced_pages", "decisions", "sequence_improvement"],
+            "targeted_regeneration_report.json": ["enabled", "config", "eligible_targets", "decisions", "sequence_improvement"],
+            "sequence_optimization_report.json": [
                 "enabled",
                 "config",
                 "pages_considered",
@@ -1926,11 +1835,34 @@ class BookforgePipeline:
                 "before_summary",
                 "after_summary",
                 "net_improvement",
-            ]:
-                if field not in sequence_opt:
-                    failures.append(f"sequence_optimization_report.json missing {field}")
+            ],
+            "hidden_world_report.json": ["summary_score", "warnings"],
+            "storefront_optimization_report.json": ["enabled", "look_inside", "first_pages_strength_score", "summary_score", "limitations"],
+            "character_commercial_report.json": ["enabled", "summary_score", "lead_character_strength_summary", "weakest_pages", "strongest_pages", "limitations"],
+            "dual_audience_report.json": ["enabled", "summary_score", "child_channel_summary_score", "adult_channel_summary_score", "balance_summary_score", "strongest_pages", "weakest_pages", "child_confusion_risk_pages", "adult_flatness_risk_pages", "imbalance_pages", "positive_notes", "warnings", "limitations"],
+            "page_turn_tension_report.json": ["enabled", "summary_score", "weak_turn_runs", "leftward_resistance_runs", "over_resolved_turns", "strong_turn_pages", "warnings", "positive_notes", "limitations", "findings"],
+        }
+
+        book_quality_report_path = review_dir / "book_quality_report.json"
+        if not book_quality_report_path.exists():
+            write_book_quality_report(book_quality_report_path, build_book_quality_report(review_dir))
+            warnings.append("Generated review/book_quality_report.json from legacy review artifacts")
+        if book_quality_report_path.exists():
+            payload = json.loads(book_quality_report_path.read_text(encoding="utf-8"))
+            failures.extend(validate_book_quality_report(payload))
         else:
-            warnings.append("Missing review/sequence_optimization_report.json")
+            failures.append("Missing review/book_quality_report.json")
+
+        for name, required_fields in legacy_artifacts.items():
+            path = review_dir / name
+            if path.exists():
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                for field in required_fields:
+                    if field not in payload:
+                        warnings.append(f"{name} missing {field} (legacy compatibility artifact)")
+            else:
+                continue
+
         companion_dir = review_dir / "companion"
         story_parsed_path = out / "preprod" / "story_parsed.json"
         expects_companion = False

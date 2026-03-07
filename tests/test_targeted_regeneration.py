@@ -192,4 +192,4 @@ def test_report_schema_and_pipeline_artifact(tmp_path: Path):
     assert "decisions" in payload
     assert "sequence_improvement" in payload
     required = BookforgePipeline()._expected_package_artifacts()
-    assert "review/targeted_regeneration_report.json" in required
+    assert "review/book_quality_report.json" in required

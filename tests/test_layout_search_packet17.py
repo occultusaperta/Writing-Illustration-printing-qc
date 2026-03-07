@@ -108,7 +108,7 @@ def test_disable_noop_and_verify_package_inclusion(tmp_path, monkeypatch):
     out = tmp_path / "out"
     out.mkdir(parents=True)
     required = BookforgePipeline()._expected_package_artifacts()
-    assert "review/layout_search_report.json" in required
+    assert "review/book_quality_report.json" in required
 
     for rel in required:
         path = out / rel
@@ -119,6 +119,8 @@ def test_disable_noop_and_verify_package_inclusion(tmp_path, monkeypatch):
                 payload = {"status": "PASS"}
             elif path.name == "production_report.json":
                 payload = {"post": {"crop_mode": "smart", "director_grade_enabled": True, "tone_curve_preset": "storybook_lux"}, "qa_thresholds": {}, "cache_hit_rate": 1.0, "dual_audience": {"enabled": False}, "page_turn_tension": {"enabled": False}}
+            elif path.name == "book_quality_report.json":
+                payload = {"schema_version": "1.0", "generated_at": "2024-01-01T00:00:00Z", "artifact": "book_quality_report.json", "summary_scores": {"overall_sequence_score": 0.5, "color_flow_summary_score": 0.5, "architecture_flow_summary_score": 0.5, "energy_curve_summary_score": 0.5}, "warnings": [], "limitations": [], "per_page_notes": [], "sequence_findings": {}, "actions_taken": {}, "legacy_artifacts": {}}
             elif path.name == "book_sequence_report.json":
                 payload = {"overall_sequence_score": 0.9, "color_flow_summary_score": 0.9, "architecture_flow_summary_score": 0.9, "energy_curve_summary_score": 0.9, "weak_clusters": [], "saliency_flow_sequence": {}, "dual_audience_summary": {}}
             elif path.name == "reselection_report.json":

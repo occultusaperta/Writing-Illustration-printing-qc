@@ -134,4 +134,4 @@ def test_report_schema_and_safe_artifact_generation(tmp_path: Path):
 
 def test_pipeline_artifact_generation_requirements_include_reselection_report():
     required = BookforgePipeline()._expected_package_artifacts()
-    assert "review/reselection_report.json" in required
+    assert "review/book_quality_report.json" in required

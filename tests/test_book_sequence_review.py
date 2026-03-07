@@ -137,4 +137,4 @@ def test_report_schema_and_safe_behavior_when_metadata_absent(tmp_path):
 
 def test_pipeline_artifact_generation_requirements_include_sequence_report():
     required = BookforgePipeline()._expected_package_artifacts()
-    assert "review/book_sequence_report.json" in required
+    assert "review/book_quality_report.json" in required
