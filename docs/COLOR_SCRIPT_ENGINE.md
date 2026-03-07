@@ -57,3 +57,31 @@ Packet 3 adds additive candidate image scoring only (no ranking/reselection chan
 ### Pipeline integration scope
 - Color scores are attached to candidate metadata (`candidate.metadata.color_score`) during candidate QA scoring.
 - Existing candidate ranking, reselection behavior, and post-processing logic are intentionally unchanged in Packet 3.
+
+## Color Script Engine Phase C — Automatic Color Correction (Packet 4)
+
+Packet 4 introduces controlled automatic post-processing driven by Packet 3 color scoring hints.
+
+### What is applied
+- Bounded, deterministic transforms selected from `post_process_actions` hints:
+  - `lightness_shift` (LAB L-channel ±10 max)
+  - `contrast_lift` (L curve factor up to 1.15)
+  - `temperature_shift` (LAB a/b shift ±8 max)
+  - `saturation_adjust` (chroma scaling up to 1.12 / down to 0.88)
+  - `shadow_balance` (gamma in [0.9, 1.1])
+- Transforms are applied in stable order and capped to at most 3 actions.
+
+### Safety constraints
+- No post-process is applied when `composite_score >= 0.92`.
+- If corrected image rescoring yields a lower composite score, correction is aborted and original image is retained.
+
+### Non-destructive pipeline behavior
+- Runs during QC after scoring and before ranking.
+- Original candidate remains unchanged and still participates in ranking.
+- Corrected output is attached as metadata only:
+  - `candidate.metadata.color_postprocess` (actions + score delta)
+  - `candidate.metadata.corrected_variant` (path + postprocess score delta)
+
+### Score delta tracking
+- Corrected candidates are re-profiled and re-scored with `score_color_adherence`.
+- Metadata records original score, corrected score, and `postprocess_score_delta` for deferred ranking work in later packets.

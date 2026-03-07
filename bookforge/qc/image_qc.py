@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from bookforge.qc.composition_qc import focus_bleed_overlap
+from bookforge.color_script.postprocess import apply_color_postprocess
 from bookforge.color_script.scoring import score_candidate_image_colors
 from bookforge.qc.gpu_batch_scoring import gpu_batch_scoring_enabled, score_candidate_batch
 from bookforge.qc.print_qc import analyze_print_qc, print_qc_warnings
@@ -149,7 +150,23 @@ def choose_best_variant(
             report["gpu_batch_scores"] = gpu
         if page_number is not None:
             color_score = score_candidate_image_colors(report["path"], page_number=page_number, page_spec=page_color_spec, master_palette=master_palette)
-            report.setdefault("metadata", {})["color_score"] = color_score.to_dict()
+            metadata = report.setdefault("metadata", {})
+            metadata["color_score"] = color_score.to_dict()
+            if color_score.disposition == "POST_PROCESS":
+                correction_spec = dict(page_color_spec or {})
+                if master_palette is not None:
+                    correction_spec["_master_palette"] = master_palette
+                postprocess = apply_color_postprocess(report["path"], color_score, correction_spec)
+                corrected_path = Path(report["path"]).with_name(f"{Path(report['path']).stem}__cse_pp.png")
+                postprocess.corrected_image.save(corrected_path)
+                metadata["color_postprocess"] = {
+                    "actions": postprocess.actions_applied,
+                    "delta_score": postprocess.delta_scores_estimate.get("composite_delta", 0.0),
+                }
+                metadata["corrected_variant"] = {
+                    "path": str(corrected_path),
+                    "postprocess_score_delta": postprocess.delta_scores_estimate.get("composite_delta", 0.0),
+                }
 
     scored = sorted(
         reports,
