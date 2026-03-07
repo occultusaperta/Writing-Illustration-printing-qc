@@ -35,6 +35,7 @@ def build_prompt_object(
     planning_prompt_lines: List[str] | None = None,
     planning_negative_lines: List[str] | None = None,
     camera_language_guidance: Dict[str, Any] | None = None,
+    hidden_world_guidance: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     pvc = lock.get("premium_visual_contract", {})
     composition_guidance = pvc.get("composition_guidance", {}) if isinstance(pvc.get("composition_guidance", {}), dict) else {}
@@ -129,6 +130,7 @@ def build_prompt_object(
             "color_script_guidance": color_script_guidance or {},
             "page_architecture_guidance": page_architecture_guidance or {},
             "camera_language_guidance": camera_language_guidance or {},
+            "hidden_world_guidance": hidden_world_guidance or {},
         },
     }
 
@@ -175,6 +177,7 @@ def build_prompt_contract(
                 planning_prompt_lines=page_guidance.get("prompt_lines", []),
                 planning_negative_lines=page_guidance.get("negative_lines", []),
                 camera_language_guidance=page_guidance.get("camera_language_guidance", {}),
+                hidden_world_guidance=page_guidance.get("hidden_world_guidance", {}),
             )
         )
 

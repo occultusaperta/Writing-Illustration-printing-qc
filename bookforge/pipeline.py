@@ -39,6 +39,15 @@ from bookforge.page_architecture.types import to_primitive as arch_to_primitive
 from bookforge.page_architecture.layout_apply import build_layout_application_map
 from bookforge.camera_language import plan_camera_sequence, write_planning_artifact as write_camera_planning_artifact
 from bookforge.camera_language.prompting import build_camera_guidance, build_camera_negative_lines, build_camera_prompt_lines
+from bookforge.hidden_world import (
+    build_hidden_world_guidance,
+    build_hidden_world_negative_lines,
+    build_hidden_world_prompt_lines,
+    build_hidden_world_sequence_finding,
+    plan_hidden_world_sequence,
+    write_hidden_world_plan,
+    write_hidden_world_report,
+)
 from bookforge.typography import build_typography_sequence_finding, plan_page_typography, score_typography_plan
 from bookforge.profiles import apply_profile, load_profile
 from bookforge.qc.image_qc import choose_best_variant, write_qa_report
@@ -95,6 +104,7 @@ def _build_planning_prompt_guidance(out: Path) -> Dict[int, Dict[str, Any]]:
     emotion_payload = _load_json_if_exists(planning_dir / "emotion_analysis.json") or []
     arch_plan = _load_json_if_exists(planning_dir / "architecture_plan.json") or []
     camera_plan = _load_json_if_exists(planning_dir / "camera_sequence_plan.json") or {}
+    hidden_world_plan = _load_json_if_exists(planning_dir / "hidden_world_plan.json") or {}
 
     emotion_by_page = {int(x.get("page_number", 0)): x for x in emotion_payload if isinstance(x, dict)}
     color_by_page = {int(x.get("page_number", 0)): x for x in color_payload.get("pages", []) if isinstance(x, dict)}
@@ -104,10 +114,15 @@ def _build_planning_prompt_guidance(out: Path) -> Dict[int, Dict[str, Any]]:
         for x in (camera_plan.get("pages", []) if isinstance(camera_plan, dict) else [])
         if isinstance(x, dict)
     }
+    hidden_by_page = {
+        int(x.get("page_number", 0)): x
+        for x in (hidden_world_plan.get("pages", []) if isinstance(hidden_world_plan, dict) else [])
+        if isinstance(x, dict)
+    }
 
     variants = {v.variant_id: v for v in architecture_templates()}
 
-    page_numbers = sorted(set(color_by_page.keys()) | set(arch_by_page.keys()) | set(emotion_by_page.keys()) | set(camera_by_page.keys()))
+    page_numbers = sorted(set(color_by_page.keys()) | set(arch_by_page.keys()) | set(emotion_by_page.keys()) | set(camera_by_page.keys()) | set(hidden_by_page.keys()))
     guidance: Dict[int, Dict[str, Any]] = {}
     for page_no in page_numbers:
         color_g = build_color_script_guidance(color_by_page.get(page_no), emotion_by_page.get(page_no))
@@ -119,16 +134,35 @@ def _build_planning_prompt_guidance(out: Path) -> Dict[int, Dict[str, Any]]:
                 variant = {"zones": [arch_to_primitive(z) for z in variants[selected_variant].zones]}
         arch_g = build_page_architecture_guidance(plan, variant)
         camera_g = build_camera_guidance(camera_by_page.get(page_no))
-        prompt_lines = build_color_prompt_lines(color_g) + build_architecture_prompt_lines(arch_g) + build_camera_prompt_lines(camera_g)
-        negative_lines = build_color_negative_lines(color_g) + build_architecture_negative_lines(arch_g) + build_camera_negative_lines(camera_g)
+        hidden_g = build_hidden_world_guidance(hidden_by_page.get(page_no))
+        prompt_lines = build_color_prompt_lines(color_g) + build_architecture_prompt_lines(arch_g) + build_camera_prompt_lines(camera_g) + build_hidden_world_prompt_lines(hidden_g)
+        negative_lines = build_color_negative_lines(color_g) + build_architecture_negative_lines(arch_g) + build_camera_negative_lines(camera_g) + build_hidden_world_negative_lines(hidden_g)
         guidance[page_no] = {
             "color_script_guidance": color_g,
             "page_architecture_guidance": arch_g,
             "camera_language_guidance": camera_g,
+            "hidden_world_guidance": hidden_g,
             "prompt_lines": prompt_lines,
             "negative_lines": negative_lines,
         }
     return guidance
+
+
+def _hidden_world_enabled() -> bool:
+    return _feature_flag("BOOKFORGE_HIDDEN_WORLD", default="true")
+
+
+def _load_hidden_world_plan(out: Path) -> Dict[int, Dict[str, Any]]:
+    planning_dir = out / "preprod" / "planning"
+    payload = _load_json_if_exists(planning_dir / "hidden_world_plan.json") or {}
+    if not isinstance(payload, dict):
+        return {}
+    rows = payload.get("pages", []) if isinstance(payload.get("pages", []), list) else []
+    return {
+        int(row.get("page_number", 0)): row
+        for row in rows
+        if isinstance(row, dict) and int(row.get("page_number", 0)) > 0
+    }
 
 
 def _load_color_scoring_context(out: Path) -> tuple[Dict[int, Dict[str, Any]], Dict[str, Any]]:
@@ -436,6 +470,10 @@ class BookforgePipeline:
         if _feature_flag("BOOKFORGE_CAMERA_LANGUAGE", default="true"):
             camera_plan = plan_camera_sequence(source_pages)
             write_camera_planning_artifact(planning_dir, camera_plan)
+
+        if _hidden_world_enabled():
+            hidden_world_plan = plan_hidden_world_sequence(pages=parsed.get("pages", []))
+            write_hidden_world_plan(planning_dir / "hidden_world_plan.json", hidden_world_plan)
 
         trim_w, trim_h = parse_trim_size(size)
         req_w = int((trim_w + 2 * self.bleed_in) * 300)
@@ -857,6 +895,7 @@ class BookforgePipeline:
         color_spec_by_page, master_palette = _load_color_scoring_context(out)
         architecture_by_page = _load_architecture_scoring_context(out)
         camera_by_page = _load_camera_sequence_plan(out) if _feature_flag("BOOKFORGE_CAMERA_LANGUAGE", default="true") else {}
+        hidden_world_by_page = _load_hidden_world_plan(out) if _hidden_world_enabled() else {}
         typography_by_page = _build_typography_plans(
             parsed=parsed,
             architecture_by_page=_load_architecture_scoring_context(out),
@@ -968,6 +1007,8 @@ class BookforgePipeline:
                 age_range=str(lock.get("editorial", {}).get("age_band", "")),
                 shot_plan_entry=camera_by_page.get(no),
                 prompt_metadata=prompt_metadata_by_page.get(no),
+                hidden_world_guidance=hidden_world_by_page.get(no),
+                illustration_notes=str(next((pg.get("illustration_notes", "") for pg in parsed.get("pages", []) if int(pg.get("page_number", 0) or 0) == no), "")),
             )
             qa_attempts.append({"page": no, "attempt": 1, **qa})
             rounds = 0
@@ -997,6 +1038,8 @@ class BookforgePipeline:
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
                     shot_plan_entry=camera_by_page.get(no),
                     prompt_metadata=prompt_metadata_by_page.get(no),
+                    hidden_world_guidance=hidden_world_by_page.get(no),
+                    illustration_notes=str(next((pg.get("illustration_notes", "") for pg in parsed.get("pages", []) if int(pg.get("page_number", 0) or 0) == no), "")),
                 )
                 if qa.get("best", {}).get("focus_bleed_overlap", 0.0) > lock["qa"].get("max_focus_bleed_overlap", 0.15):
                     hard_prompt = f"{hard_prompt} subject centered within safe area, keep key action away from edges"
@@ -1056,6 +1099,8 @@ class BookforgePipeline:
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
                     shot_plan_entry=camera_by_page.get(a),
                     prompt_metadata=prompt_metadata_by_page.get(a),
+                    hidden_world_guidance=hidden_world_by_page.get(a),
+                    illustration_notes=str(next((pg.get("illustration_notes", "") for pg in parsed.get("pages", []) if int(pg.get("page_number", 0) or 0) == a), "")),
                 )
                 qa_attempts.append({"page": f"{a}-{b}", "attempt": spread_round, "spread": True, **spread_qa})
                 if not spread_qa["passes"]:
@@ -1074,6 +1119,8 @@ class BookforgePipeline:
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
                     shot_plan_entry=camera_by_page.get(a),
                     prompt_metadata=prompt_metadata_by_page.get(a),
+                    hidden_world_guidance=hidden_world_by_page.get(a),
+                    illustration_notes=str(next((pg.get("illustration_notes", "") for pg in parsed.get("pages", []) if int(pg.get("page_number", 0) or 0) == a), "")),
                 )
                 right_best, right_qa = choose_best_variant(
                     [Path(selected[b - 1])],
@@ -1088,6 +1135,8 @@ class BookforgePipeline:
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
                     shot_plan_entry=camera_by_page.get(b),
                     prompt_metadata=prompt_metadata_by_page.get(b),
+                    hidden_world_guidance=hidden_world_by_page.get(b),
+                    illustration_notes=str(next((pg.get("illustration_notes", "") for pg in parsed.get("pages", []) if int(pg.get("page_number", 0) or 0) == b), "")),
                 )
                 qa_attempts.append({"page": a, "attempt": spread_round, "spread_half": "left", **left_qa})
                 qa_attempts.append({"page": b, "attempt": spread_round, "spread_half": "right", **right_qa})
@@ -1151,7 +1200,7 @@ class BookforgePipeline:
         )[:5]
         cache_bools = [hit for arr in cache_hits.values() for hit in arr]
         cache_hit_rate = (sum(1 for x in cache_bools if x) / len(cache_bools)) if cache_bools else 0.0
-        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "applied_page_architecture": applied_arch_review}
+        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "hidden_world": {"enabled": _hidden_world_enabled(), "planned_pages": len(hidden_world_by_page)}, "applied_page_architecture": applied_arch_review}
         write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
         _studio_debug("running premium visual QC")
@@ -1210,8 +1259,16 @@ class BookforgePipeline:
                 for p in parsed.get("pages", [])
                 if isinstance(p, dict)
             ],
+            hidden_world_plan=(_load_json_if_exists(out / "preprod" / "planning" / "hidden_world_plan.json") if _hidden_world_enabled() else {}),
         )
         write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
+        hidden_world_plan_payload = _load_json_if_exists(out / "preprod" / "planning" / "hidden_world_plan.json") if _hidden_world_enabled() else {}
+        hidden_world_finding = build_hidden_world_sequence_finding(
+            page_count=len(parsed.get("pages", [])),
+            hidden_world_plan=hidden_world_plan_payload if isinstance(hidden_world_plan_payload, dict) else {},
+            qa_attempts=qa_attempts,
+        )
+        write_hidden_world_report(review / "hidden_world_report.json", hidden_world_finding)
         (review / "typography_report.json").write_text(
             json.dumps((sequence_report.to_dict().get("typography_sequence", {}) if hasattr(sequence_report, "to_dict") else {}), indent=2),
             encoding="utf-8",
@@ -1259,6 +1316,7 @@ class BookforgePipeline:
                         for p in parsed.get("pages", [])
                         if isinstance(p, dict)
                     ],
+                    hidden_world_plan=(_load_json_if_exists(out / "preprod" / "planning" / "hidden_world_plan.json") if _hidden_world_enabled() else {}),
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
@@ -1366,6 +1424,8 @@ class BookforgePipeline:
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
                     shot_plan_entry=camera_by_page.get(page_no),
                     prompt_metadata=prompt_metadata_by_page.get(page_no),
+                    hidden_world_guidance=hidden_world_by_page.get(page_no),
+                    illustration_notes=str(next((pg.get("illustration_notes", "") for pg in parsed.get("pages", []) if int(pg.get("page_number", 0) or 0) == page_no), "")),
                 )
                 generated_candidates[page_no] = regen_qa.get("best", {})
 
@@ -1405,6 +1465,7 @@ class BookforgePipeline:
                         for p in parsed.get("pages", [])
                         if isinstance(p, dict)
                     ],
+                    hidden_world_plan=(_load_json_if_exists(out / "preprod" / "planning" / "hidden_world_plan.json") if _hidden_world_enabled() else {}),
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
@@ -1467,6 +1528,7 @@ class BookforgePipeline:
             "review/typography_report.json",
             "review/reselection_report.json",
             "review/targeted_regeneration_report.json",
+            "review/hidden_world_report.json",
             "review/report.html",
         ]
 
@@ -1545,6 +1607,15 @@ class BookforgePipeline:
         else:
             warnings.append("Missing review/reselection_report.json")
         targeted_regen_report_path = review_dir / "targeted_regeneration_report.json"
+        hidden_world_report_path = review_dir / "hidden_world_report.json"
+        if hidden_world_report_path.exists():
+            payload = json.loads(hidden_world_report_path.read_text(encoding="utf-8"))
+            for field in ["summary_score", "warnings"]:
+                if field not in payload:
+                    failures.append(f"hidden_world_report.json missing {field}")
+        else:
+            warnings.append("Missing review/hidden_world_report.json")
+
         if targeted_regen_report_path.exists():
             targeted_regen = json.loads(targeted_regen_report_path.read_text(encoding="utf-8"))
             for field in ["enabled", "config", "eligible_targets", "decisions", "sequence_improvement"]:
