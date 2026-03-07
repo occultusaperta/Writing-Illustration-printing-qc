@@ -141,7 +141,12 @@ def test_verify_warns_not_fails_when_editorial_missing(tmp_path: Path):
         path = out / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.suffix == ".json":
-            payload = {"status": "PASS"} if path.name == "preflight_report.json" else {"post": {"crop_mode": "smart", "director_grade_enabled": True, "tone_curve_preset": "storybook_lux"}, "qa_thresholds": {}, "cache_hit_rate": 1.0}
+            if path.name == "preflight_report.json":
+                payload = {"status": "PASS"}
+            elif path.name == "book_sequence_report.json":
+                payload = {"overall_sequence_score": 0.9, "color_flow_summary_score": 0.9, "architecture_flow_summary_score": 0.9, "energy_curve_summary_score": 0.9, "weak_clusters": []}
+            else:
+                payload = {"post": {"crop_mode": "smart", "director_grade_enabled": True, "tone_curve_preset": "storybook_lux"}, "qa_thresholds": {}, "cache_hit_rate": 1.0}
             path.write_text(json.dumps(payload), encoding="utf-8")
         else:
             path.write_bytes(b"x")
