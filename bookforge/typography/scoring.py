@@ -4,6 +4,7 @@ from statistics import mean
 from typing import Any, Dict, List
 
 from bookforge.typography.types import PageTypographyPlan, TypographyScoreResult, TypographySequenceFinding
+from bookforge.scoring_registry import scoring_registry
 from bookforge.utils import clamp01
 
 
@@ -47,13 +48,14 @@ def score_typography_plan(
     if plan.special_positioning_mode != "anchored":
         notes.append("Special positioning mode active.")
 
+    weights = scoring_registry().typography.composite_weights
     composite = clamp01(
-        0.2 * contrast_readability_score
-        + 0.18 * text_zone_quietness_score
-        + 0.2 * fit_score
-        + 0.16 * expressive_alignment_score
-        + 0.14 * readaloud_rhythm_score
-        + 0.12 * print_safety_score
+        weights["contrast"] * contrast_readability_score
+        + weights["quietness"] * text_zone_quietness_score
+        + weights["fit"] * fit_score
+        + weights["expressive"] * expressive_alignment_score
+        + weights["rhythm"] * readaloud_rhythm_score
+        + weights["print_safety"] * print_safety_score
     )
 
     return TypographyScoreResult(

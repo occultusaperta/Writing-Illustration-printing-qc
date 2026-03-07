@@ -6,6 +6,7 @@ from typing import Any, Dict, Sequence
 import numpy as np
 
 from bookforge.saliency_flow.saliency import analyze_saliency_flow
+from bookforge.scoring_registry import scoring_registry
 from bookforge.saliency_flow.text_zones import score_text_zone_quietness
 from bookforge.saliency_flow.types import (
     PageTurnFlowResult,
@@ -33,7 +34,7 @@ def _point_in_zone(x: float, y: float, zone: Dict[str, Any]) -> bool:
 
 def _score_primary_focus(first_fixation: Any, architecture_variant: Dict[str, Any] | None, shot_plan_entry: Dict[str, Any] | None, prompt_metadata: Dict[str, Any] | None) -> tuple[float, list[str], list[str]]:
     if first_fixation is None:
-        return 0.25, ["first_fixation_not_found"], []
+        return scoring_registry().saliency_flow.no_first_fixation_score, ["first_fixation_not_found"], []
     warnings: list[str] = []
     notes: list[str] = []
     zones = _zones(architecture_variant)
@@ -72,7 +73,7 @@ def score_page_turn_flow(page_number: int | None, directional_energy: Dict[str, 
     arch_type = str((architecture_variant or {}).get("architecture_type", ""))
     applicable = bool(page_number and page_number % 2 == 1) or arch_type in {"full_bleed_spread", "wordless_spread"}
     if not applicable:
-        return PageTurnFlowResult(False, right, left, 0.5, [], ["page_turn_flow_not_applicable"])
+        return PageTurnFlowResult(False, right, left, scoring_registry().saliency_flow.not_applicable_page_turn_score, [], ["page_turn_flow_not_applicable"])
 
     score = _clip01(0.5 + (right - left) * 0.55)
     warnings = ["page_turn_resistance_detected"] if score < 0.42 else []
@@ -108,7 +109,7 @@ def score_spread_bridge(saliency_map: np.ndarray, architecture_variant: Dict[str
 def _score_fixation_order(flow: Any, text_quietness: TextZoneQuietnessResult) -> tuple[float, list[str]]:
     peaks = flow.peaks
     if not peaks:
-        return 0.3, ["fixation_order_unavailable"]
+        return scoring_registry().saliency_flow.no_fixation_order_score, ["fixation_order_unavailable"]
     top = peaks[0].strength
     second = peaks[1].strength if len(peaks) > 1 else 0.0
     separation = max(0.0, top - second)
@@ -135,12 +136,13 @@ def score_saliency_flow(
     warnings = list(flow.warnings) + focus_warnings + text_quietness.warnings + page_turn.warnings + spread_bridge.warnings + fixation_warnings
     notes = flow.notes + focus_notes
 
+    weights = scoring_registry().saliency_flow.composite_weights
     composite = _clip01(
-        0.30 * primary_focus_score
-        + 0.20 * text_quietness.quietness_score
-        + 0.18 * page_turn.page_turn_flow_score
-        + 0.16 * spread_bridge.bridge_score
-        + 0.16 * fixation_order_score
+        weights["primary_focus"] * primary_focus_score
+        + weights["text_quietness"] * text_quietness.quietness_score
+        + weights["page_turn"] * page_turn.page_turn_flow_score
+        + weights["spread_bridge"] * spread_bridge.bridge_score
+        + weights["fixation_order"] * fixation_order_score
     )
     confidence = _clip01(0.45 + 0.35 * flow.confidence + 0.2 * (1.0 if flow.first_fixation else 0.0))
 

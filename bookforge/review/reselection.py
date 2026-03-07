@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from PIL import Image
+from bookforge.scoring_registry import scoring_registry, transition_target
 from bookforge.utils import clamp01
 
 
@@ -73,11 +74,8 @@ def _score_local(candidate: Dict[str, Any]) -> float:
     ensemble = ((metadata.get("visual_ensemble") or {}).get("ensemble_score", 0.5)) if isinstance(metadata, dict) else 0.5
     arch = ((metadata.get("page_architecture_score") or {}).get("composite_score", 0.5)) if isinstance(metadata, dict) else 0.5
     saliency = ((metadata.get("saliency_flow_score") or {}).get("composite_score", 0.5)) if isinstance(metadata, dict) else 0.5
-    return round(clamp01(0.37 * float(color) + 0.33 * float(ensemble) + 0.22 * float(arch) + 0.08 * float(saliency)), 6)
-
-
-def _transition_target(mode: str, strength: float) -> float:
-    return max(0.45, strength * 0.8) if mode == "hard_cut" else min(0.22, strength * 0.45)
+    weights = scoring_registry().local_candidate.reselection_local_weights
+    return round(clamp01(weights["color"] * float(color) + weights["ensemble"] * float(ensemble) + weights["architecture"] * float(arch) + weights["saliency"] * float(saliency)), 6)
 
 
 def _score_sequence_support(page: int, candidate: Dict[str, Any], sequence_report: Dict[str, Any]) -> float:
@@ -85,7 +83,7 @@ def _score_sequence_support(page: int, candidate: Dict[str, Any], sequence_repor
     transition = next((row for row in transition_rows if int(row.get("to_page", 0)) == page), None)
     drift = float(candidate.get("page_to_page_hist_drift", 0.0) or 0.0)
     if transition:
-        target = _transition_target(str(transition.get("expected_mode", "blend")), float(transition.get("expected_strength", 0.5) or 0.5))
+        target = transition_target(str(transition.get("expected_mode", "blend")), float(transition.get("expected_strength", 0.5) or 0.5))
         transition_fit = clamp01(1.0 - abs(drift - target))
     else:
         transition_fit = 0.5
@@ -94,7 +92,8 @@ def _score_sequence_support(page: int, candidate: Dict[str, Any], sequence_repor
     ensemble = float(((metadata.get("visual_ensemble") or {}).get("ensemble_score", 0.5)) or 0.5)
     arch = float(((metadata.get("page_architecture_score") or {}).get("composite_score", 0.5)) or 0.5)
 
-    return round(clamp01(0.5 * transition_fit + 0.3 * ensemble + 0.2 * arch), 6)
+    weights = scoring_registry().local_candidate.reselection_sequence_support_weights
+    return round(clamp01(weights["transition_fit"] * transition_fit + weights["ensemble"] * ensemble + weights["architecture"] * arch), 6)
 
 
 def _sequence_flagged_pages(sequence_report: Dict[str, Any]) -> set[int]:
@@ -110,10 +109,10 @@ def _sequence_flagged_pages(sequence_report: Dict[str, Any]) -> set[int]:
         page = int(row.get("page", 0) or 0)
         if page <= 0:
             continue
-        if float(row.get("premium_qc_score", 1.0) or 1.0) < 0.78:
+        if float(row.get("premium_qc_score", 1.0) or 1.0) < scoring_registry().thresholds.reselection_premium_qc_min:
             flagged.add(page)
         cscore = row.get("color_transition_to_page_score")
-        if cscore is not None and float(cscore) < 0.72:
+        if cscore is not None and float(cscore) < scoring_registry().thresholds.reselection_transition_score_min:
             flagged.add(page)
     return flagged
 
@@ -124,7 +123,8 @@ def _severe_local_issue(candidate: Dict[str, Any]) -> bool:
     ensemble = float(((metadata.get("visual_ensemble") or {}).get("ensemble_score", 1.0)) or 1.0)
     arch = float(((metadata.get("page_architecture_score") or {}).get("composite_score", 1.0)) or 1.0)
     saliency = float(((metadata.get("saliency_flow_score") or {}).get("composite_score", 1.0)) or 1.0)
-    return color < 0.68 or ensemble < 0.7 or arch < 0.65 or saliency < 0.45
+    thresholds = scoring_registry().thresholds
+    return color < thresholds.reselection_color_min or ensemble < thresholds.reselection_ensemble_min or arch < thresholds.reselection_architecture_min or saliency < thresholds.reselection_saliency_min
 
 
 def _candidate_pool_by_page(qa_attempts: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
@@ -214,13 +214,14 @@ def run_bounded_reselection(
 
         current_local = _score_local(best)
         current_seq = _score_sequence_support(page, best, sequence_report)
-        current_comp = clamp01(0.7 * current_local + 0.3 * current_seq)
+        comp_weights = scoring_registry().local_candidate.reselection_composite_weights
+        current_comp = clamp01(comp_weights["local"] * current_local + comp_weights["sequence"] * current_seq)
 
         best_comp: CandidateComparison | None = None
         for candidate in runner_ups:
             cand_local = _score_local(candidate)
             cand_seq = _score_sequence_support(page, candidate, sequence_report)
-            cand_comp = clamp01(0.7 * cand_local + 0.3 * cand_seq)
+            cand_comp = clamp01(comp_weights["local"] * cand_local + comp_weights["sequence"] * cand_seq)
             local_delta = round(cand_local - current_local, 6)
             seq_delta = round(cand_seq - current_seq, 6)
             comp_delta = round(cand_comp - current_comp, 6)

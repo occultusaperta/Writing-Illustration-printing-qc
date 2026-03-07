@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from bookforge.scoring_registry import scoring_registry, transition_target
 from bookforge.utils import clamp01
 
 
@@ -17,7 +18,8 @@ def local_score_bundle(candidate: Dict[str, Any]) -> Dict[str, float]:
     typography_proxy = clamp01(1.0 - float(candidate.get("focus_bleed_overlap", 0.15) or 0.15))
     dual_audience = float(((meta.get("dual_audience_score") or {}).get("composite_score", 0.5)) or 0.5)
     page_turn = float(((meta.get("page_turn_tension_score") or {}).get("page_turn_tension_score", 0.5)) or 0.5)
-    composite = clamp01(0.195 * color + 0.175 * ensemble + 0.155 * architecture + 0.11 * saliency + 0.09 * shot + 0.08 * hidden_world + 0.07 * character + 0.03 * typography_proxy + 0.08 * dual_audience + 0.015 * page_turn)
+    weights = scoring_registry().local_candidate.sequence_optimizer_local_weights
+    composite = clamp01(weights["color"] * color + weights["ensemble"] * ensemble + weights["architecture"] * architecture + weights["saliency"] * saliency + weights["camera"] * shot + weights["hidden_world"] * hidden_world + weights["character"] * character + weights["typography"] * typography_proxy + weights["dual_audience"] * dual_audience + weights["page_turn_tension"] * page_turn)
     return {
         "color": color,
         "architecture": architecture,
@@ -94,7 +96,7 @@ def transition_fit(page: int, candidate: Dict[str, Any], sequence_report: Dict[s
         return 0.5
     mode = str(row.get("expected_mode", "blend"))
     strength = float(row.get("expected_strength", 0.5) or 0.5)
-    target = max(0.45, strength * 0.8) if mode == "hard_cut" else min(0.22, strength * 0.45)
+    target = transition_target(mode, strength)
     drift = float(candidate.get("page_to_page_hist_drift", 0.0) or 0.0)
     return clamp01(1.0 - abs(drift - target))
 
@@ -154,18 +156,5 @@ def move_component_deltas(
 
 
 def composite_delta(deltas: Dict[str, float]) -> float:
-    weights = {
-        "color_flow_score": 0.13,
-        "architecture_flow_score": 0.12,
-        "camera_flow_score": 0.11,
-        "saliency_flow_score": 0.14,
-        "typography_sequence_score": 0.07,
-        "hidden_world_continuity_score": 0.07,
-        "storefront_opening_score": 0.07,
-        "character_consistency_score": 0.08,
-        "layout_search_support_score": 0.08,
-        "weak_cluster_reduction_score": 0.12,
-        "dual_audience_balance_score": 0.08,
-        "page_turn_tension_summary_score": 0.03,
-    }
+    weights = scoring_registry().local_candidate.sequence_optimizer_delta_weights
     return round(sum(float(deltas.get(k, 0.0) or 0.0) * w for k, w in weights.items()), 6)

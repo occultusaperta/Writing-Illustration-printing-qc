@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -9,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from bookforge.page_architecture.scoring import score_architecture_variant
+from bookforge.scoring_registry import feature_flag_enabled, scoring_registry
 from bookforge.qc.composition_qc import focus_bleed_overlap
 from bookforge.color_script.postprocess import apply_color_postprocess
 from bookforge.color_script.scoring import score_candidate_image_colors
@@ -156,10 +156,12 @@ def choose_best_variant(
     illustration_notes: str = "",
     page_count: int | None = None,
 ) -> Tuple[Path, Dict[str, Any]]:
-    character_commercial_enabled = str(os.getenv("BOOKFORGE_CHARACTER_COMMERCIAL_SCORING", "true")).strip().lower() in {"1", "true", "yes", "on"}
-    saliency_flow_enabled = str(os.getenv("BOOKFORGE_SALIENCY_FLOW", "true")).strip().lower() in {"1", "true", "yes", "on"}
-    dual_audience_enabled = str(os.getenv("BOOKFORGE_DUAL_AUDIENCE", "true")).strip().lower() in {"1", "true", "yes", "on"}
-    page_turn_tension_enabled = str(os.getenv("BOOKFORGE_PAGE_TURN_TENSION", "true")).strip().lower() in {"1", "true", "yes", "on"}
+    registry = scoring_registry()
+    ranking = registry.image_qc_ranking
+    character_commercial_enabled = feature_flag_enabled("BOOKFORGE_CHARACTER_COMMERCIAL_SCORING")
+    saliency_flow_enabled = feature_flag_enabled("BOOKFORGE_SALIENCY_FLOW")
+    dual_audience_enabled = feature_flag_enabled("BOOKFORGE_DUAL_AUDIENCE")
+    page_turn_tension_enabled = feature_flag_enabled("BOOKFORGE_PAGE_TURN_TENSION")
     batch_scores: Dict[str, Dict[str, float]] = {}
     if gpu_batch_scoring_enabled():
         batch_scores = score_candidate_batch(paths)
@@ -266,16 +268,23 @@ def choose_best_variant(
         reports,
         key=lambda r: (
             r["passes"],
-            -4.0 * r["text_likelihood"] - 4.0 * r["watermark_likelihood"] - 3.0 * r["logo_likelihood"] - 3.0 * r["border_artifact_score"],
-            r["style_hist_similarity"] - r["page_to_page_hist_drift"] - 0.6 * r.get("color_drift_vs_style", 0.0),
-            r["sharpness"] + r["contrast"] + r["entropy"] - 0.2 * max(0.0, 100 - r.get("brightness_p95", 100)) - 5.0 * r.get("out_of_gamut_risk", 0.0),
+            -ranking.quality_penalty_text * r["text_likelihood"]
+            - ranking.quality_penalty_watermark * r["watermark_likelihood"]
+            - ranking.quality_penalty_logo * r["logo_likelihood"]
+            - ranking.quality_penalty_border_artifact * r["border_artifact_score"],
+            r["style_hist_similarity"] - r["page_to_page_hist_drift"] - ranking.style_color_drift_penalty * r.get("color_drift_vs_style", 0.0),
+            r["sharpness"]
+            + r["contrast"]
+            + r["entropy"]
+            - ranking.brightness_penalty_weight * max(0.0, ranking.brightness_penalty_floor - r.get("brightness_p95", ranking.brightness_penalty_floor))
+            - ranking.out_of_gamut_penalty_weight * r.get("out_of_gamut_risk", 0.0),
             (r.get("gpu_batch_scores") or {}).get("ranking_score", 0.0),
-            ((r.get("metadata") or {}).get("page_architecture_score") or {}).get("composite_score", 0.0),
-            0.15 * (((r.get("metadata") or {}).get("shot_adherence_score") or {}).get("composite_score", 0.0)),
-            0.05 * (((r.get("metadata") or {}).get("saliency_flow_score") or {}).get("composite_score", 0.0)),
-            0.04 * (((r.get("metadata") or {}).get("character_commercial_score") or {}).get("composite_score", 0.0)),
-            0.035 * (((r.get("metadata") or {}).get("dual_audience_score") or {}).get("composite_score", 0.0)),
-            0.02 * (((r.get("metadata") or {}).get("page_turn_tension_score") or {}).get("page_turn_tension_score", 0.0)),
+            ranking.architecture_tiebreak_weight * (((r.get("metadata") or {}).get("page_architecture_score") or {}).get("composite_score", 0.0)),
+            ranking.shot_tiebreak_weight * (((r.get("metadata") or {}).get("shot_adherence_score") or {}).get("composite_score", 0.0)),
+            ranking.saliency_tiebreak_weight * (((r.get("metadata") or {}).get("saliency_flow_score") or {}).get("composite_score", 0.0)),
+            ranking.character_tiebreak_weight * (((r.get("metadata") or {}).get("character_commercial_score") or {}).get("composite_score", 0.0)),
+            ranking.dual_audience_tiebreak_weight * (((r.get("metadata") or {}).get("dual_audience_score") or {}).get("composite_score", 0.0)),
+            ranking.page_turn_tiebreak_weight * (((r.get("metadata") or {}).get("page_turn_tension_score") or {}).get("page_turn_tension_score", 0.0)),
         ),
         reverse=True,
     )

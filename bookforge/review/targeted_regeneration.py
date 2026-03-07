@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from PIL import Image
 
 from bookforge.review.reselection import _score_local, _score_sequence_support
+from bookforge.scoring_registry import scoring_registry
 from bookforge.utils import clamp01
 
 
@@ -88,16 +89,17 @@ def write_targeted_regeneration_report(path: Path, report: RegenerationRunReport
 def _weak_dimensions(candidate: Dict[str, Any]) -> List[str]:
     metadata = candidate.get("metadata", {}) if isinstance(candidate.get("metadata", {}), dict) else {}
     dims: List[str] = []
-    if float(((metadata.get("color_score") or {}).get("composite_score", 1.0)) or 1.0) < 0.68:
+    thresholds = scoring_registry().thresholds
+    if float(((metadata.get("color_score") or {}).get("composite_score", 1.0)) or 1.0) < thresholds.reselection_color_min:
         dims.append("color")
-    if float(((metadata.get("visual_ensemble") or {}).get("ensemble_score", 1.0)) or 1.0) < 0.70:
+    if float(((metadata.get("visual_ensemble") or {}).get("ensemble_score", 1.0)) or 1.0) < thresholds.reselection_ensemble_min:
         dims.append("visual_ensemble")
-    if float(((metadata.get("page_architecture_score") or {}).get("composite_score", 1.0)) or 1.0) < 0.65:
+    if float(((metadata.get("page_architecture_score") or {}).get("composite_score", 1.0)) or 1.0) < thresholds.reselection_architecture_min:
         dims.append("architecture")
-    if float(((metadata.get("saliency_flow_score") or {}).get("composite_score", 1.0)) or 1.0) < 0.45:
+    if float(((metadata.get("saliency_flow_score") or {}).get("composite_score", 1.0)) or 1.0) < thresholds.reselection_saliency_min:
         dims.append("saliency_flow")
     overlap = float(candidate.get("focus_bleed_overlap", 0.0) or 0.0)
-    if overlap > 0.16:
+    if overlap > thresholds.targeted_regen_layout_conflict_overlap_max:
         dims.append("layout_conflict")
     return dims
 
@@ -113,10 +115,10 @@ def _is_sequence_flagged(page: int, sequence_report: Dict[str, Any]) -> bool:
             continue
         if int(row.get("page", 0) or 0) != page:
             continue
-        if float(row.get("premium_qc_score", 1.0) or 1.0) < 0.76:
+        if float(row.get("premium_qc_score", 1.0) or 1.0) < scoring_registry().thresholds.targeted_regen_premium_qc_min:
             return True
         score = row.get("color_transition_to_page_score")
-        if score is not None and float(score) < 0.70:
+        if score is not None and float(score) < scoring_registry().thresholds.targeted_regen_transition_score_min:
             return True
     return False
 
@@ -269,11 +271,12 @@ def apply_targeted_regeneration_decisions(
         previous = previous_candidates.get(page, {"path": previous_path, "metadata": {}})
         local_prev = _score_local(previous)
         seq_prev = _score_sequence_support(page, previous, sequence_report)
-        comp_prev = clamp01(0.7 * local_prev + 0.3 * seq_prev)
+        comp_weights = scoring_registry().local_candidate.reselection_composite_weights
+        comp_prev = clamp01(comp_weights["local"] * local_prev + comp_weights["sequence"] * seq_prev)
 
         local_new = _score_local(candidate_best)
         seq_new = _score_sequence_support(page, candidate_best, sequence_report)
-        comp_new = clamp01(0.7 * local_new + 0.3 * seq_new)
+        comp_new = clamp01(comp_weights["local"] * local_new + comp_weights["sequence"] * seq_new)
 
         local_delta = round(local_new - local_prev, 6)
         seq_delta = round(seq_new - seq_prev, 6)

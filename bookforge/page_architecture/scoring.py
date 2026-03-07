@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from bookforge.page_architecture.types import ArchitectureVariant, ZoneType
+from bookforge.scoring_registry import scoring_registry
 from bookforge.qc.visual_integrity import face_like_regions
 
 
@@ -216,7 +217,8 @@ def score_architecture_variant(
     fit, fit_diag = estimate_text_fitting(page_text=page_text, zones=zones, age_range=age_range)
     gutter, gutter_diag = score_gutter_safety(zones, rgb, image_path=image_path)
 
-    composite = _clip01(0.35 * readability + 0.30 * focal + 0.20 * fit + 0.15 * gutter)
+    weights = scoring_registry().page_architecture.composite_weights
+    composite = _clip01(weights["readability"] * readability + weights["focal"] * focal + weights["fit"] * fit + weights["gutter"] * gutter)
     diagnostics = {
         "text_readability": read_diag,
         "focal_alignment": focal_diag,

@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image
 
 from bookforge.page_turn.types import PageTurnTensionScoreResult
+from bookforge.scoring_registry import scoring_registry
 from bookforge.utils import clamp01
 
 
@@ -110,13 +111,14 @@ def score_page_turn_tension(
     central_deadness = clamp01(0.55 - center_std / 32.0)
     turn_resistance_penalty = clamp01(0.4 * left_pull + 0.25 * central_deadness + closure_bias)
 
+    weights = scoring_registry().page_turn.composite_weights
     composite = clamp01(
-        0.24 * rightward_vector_score
-        + 0.17 * incomplete_action_score
-        + 0.17 * cropped_continuation_score
-        + 0.15 * question_or_suspense_score
-        + 0.12 * lighting_pull_score
-        - 0.2 * turn_resistance_penalty
+        weights["rightward_vector"] * rightward_vector_score
+        + weights["incomplete_action"] * incomplete_action_score
+        + weights["cropped_continuation"] * cropped_continuation_score
+        + weights["question_or_suspense"] * question_or_suspense_score
+        + weights["lighting_pull"] * lighting_pull_score
+        + weights["turn_resistance_penalty"] * turn_resistance_penalty
     )
 
     evidence = [rightward_vector_score, cropped_continuation_score, lighting_pull_score, saliency_comp]
