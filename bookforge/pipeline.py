@@ -36,6 +36,7 @@ from bookforge.page_architecture import plan_architecture_sequence, write_planni
 from bookforge.page_architecture.prompting import build_architecture_negative_lines, build_architecture_prompt_lines, build_page_architecture_guidance
 from bookforge.page_architecture.templates import architecture_templates
 from bookforge.page_architecture.types import to_primitive as arch_to_primitive
+from bookforge.page_architecture.layout_apply import build_layout_application_map
 from bookforge.profiles import apply_profile, load_profile
 from bookforge.qc.image_qc import choose_best_variant, write_qa_report
 from bookforge.qc.kdp_preflight import KDPPreflight
@@ -114,6 +115,13 @@ def _load_color_scoring_context(out: Path) -> tuple[Dict[int, Dict[str, Any]], D
     page_spec_by_page = {int(x.get("page_number", 0)): x for x in page_specs if isinstance(x, dict)}
     return page_spec_by_page, master_palette if isinstance(master_palette, dict) else {}
 
+
+
+
+def _load_architecture_plan(out: Path) -> List[Dict[str, Any]]:
+    planning_dir = out / "preprod" / "planning"
+    arch_plan = _load_json_if_exists(planning_dir / "architecture_plan.json") or []
+    return arch_plan if isinstance(arch_plan, list) else []
 
 def _load_architecture_scoring_context(out: Path) -> Dict[int, Dict[str, Any]]:
     planning_dir = out / "preprod" / "planning"
@@ -989,7 +997,10 @@ class BookforgePipeline:
         interior = out / "interior.pdf"
         cover = out / "cover_wrap.pdf"
         guides = out / "cover_guides.pdf"
-        engine.render_interior(parsed["pages"], selected, interior, size, self.bleed_in, self.safe_in, get_preset(lock["interior_layout_preset"], "interior"), get_preset(lock["typography_preset"], "typography"), lock.get("pdf", {}), spread_pairs=spread_pairs)
+        architecture_plan = _load_architecture_plan(out)
+        variants_index = {v.variant_id: arch_to_primitive(v) for v in architecture_templates()}
+        applied_architecture_layout = build_layout_application_map(parsed["pages"], architecture_plan, variants_index, spread_pairs)
+        layout_render_meta = engine.render_interior(parsed["pages"], selected, interior, size, self.bleed_in, self.safe_in, get_preset(lock["interior_layout_preset"], "interior"), get_preset(lock["typography_preset"], "typography"), lock.get("pdf", {}), spread_pairs=spread_pairs, architecture_layout=applied_architecture_layout)
         page_plan = {"declared_page_count": page_count, "actual_pages": len(parsed["pages"]), "spread_pairs": spread_pairs}
         (out / "page_plan.json").write_text(json.dumps(page_plan, indent=2), encoding="utf-8")
         cover_config = dict(lock["cover"])
@@ -1019,6 +1030,9 @@ class BookforgePipeline:
         if architecture_review:
             review.mkdir(parents=True, exist_ok=True)
             (review / "page_architecture_scores.json").write_text(json.dumps(architecture_review, indent=2), encoding="utf-8")
+        review.mkdir(parents=True, exist_ok=True)
+        applied_arch_review = layout_render_meta.get("applied_page_architecture", []) if isinstance(layout_render_meta, dict) else []
+        (review / "applied_page_architecture.json").write_text(json.dumps(applied_arch_review, indent=2), encoding="utf-8")
         generate_contact_sheet([Path(p) for p in selected], review / "contact_sheet.pdf")
         cache_hits = generated.get("cache_hits", {})
         cache_keys = generated.get("cache_keys", {})
@@ -1034,7 +1048,7 @@ class BookforgePipeline:
         )[:5]
         cache_bools = [hit for arr in cache_hits.values() for hit in arr]
         cache_hit_rate = (sum(1 for x in cache_bools if x) / len(cache_bools)) if cache_bools else 0.0
-        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}}
+        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "applied_page_architecture": applied_arch_review}
         write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
         _studio_debug("running premium visual QC")

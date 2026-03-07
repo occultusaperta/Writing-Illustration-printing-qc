@@ -1,4 +1,4 @@
-# Page Architecture Sequencer (Packets 1, 2, 6)
+# Page Architecture Sequencer (Packets 1, 2, 6, 7)
 
 This packet adds PAS planning modules and artifact output only.
 
@@ -44,8 +44,27 @@ This packet adds PAS planning modules and artifact output only.
 - Review/provenance impact: architecture score diagnostics ride along in existing QA attempt metadata and are human-inspectable in review artifacts.
 - Ranking impact is intentionally weak: architecture score is metadata-first and only used as a late tie-break term.
 
+
+
+## Packet 7 integration (layout/compositor enforcement)
+- New layout application module: `bookforge.page_architecture.layout_apply`.
+- PAS plan + selected variant now translate into concrete per-page layout instructions used by the existing PDF renderer path.
+- Enforced architecture behavior now includes:
+  - `FULL_BLEED_SPREAD`: full-page art, spread-mode hints, gutter-sensitive metadata.
+  - `FULL_BLEED_SINGLE`: side-aware behavior (art-dominant page vs facing text-priority page).
+  - `VIGNETTE`: bounded non-bleed illustration placement with reserved whitespace.
+  - `SPOT_ILLUSTRATION`: reduced art footprint with surrounding whitespace preserved.
+  - `PANEL_SEQUENCE`: practical bounded multi-panel arrangement and caption/text zone.
+  - `WORDLESS_SPREAD`: body-text suppression in rendering.
+  - `TEXT_DOMINANT`: text-zone priority with secondary art placement.
+  - `INSET_COMPOSITE`: base art with inset overlays and simple border treatment.
+- PAS-selected text zones are applied at layout time while existing typography overflow hard-fail remains in force.
+- If PAS text zone cannot fit text, renderer falls back to preset-safe panel region and records fallback metadata.
+- Gutter/safe enforcement is applied for spread-sensitive architectures through layout-time placement adjustments/flags.
+- Pipeline review output now includes `review/applied_page_architecture.json` for per-page human verification.
+- `render_interior` now returns `applied_page_architecture` metadata rows to surface architecture application status.
+
 ## Deferred to later packets
 - Deep layout rewrite/rendering from PAS output.
 - Advanced rescoring loops across the full book / global architecture reselection.
-- Layout engine enforcement from PAS zones.
 - Monte Carlo multi-pass optimization and compositor rewrites.
