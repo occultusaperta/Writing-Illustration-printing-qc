@@ -73,6 +73,11 @@ from bookforge.story.back_matter import generate_blurb_options
 from bookforge.storefront import build_storefront_optimization_report, score_cover_thumbnail, write_storefront_optimization_report
 from bookforge.character_scoring.sequence import build_character_commercial_report
 from bookforge.layout_search import LayoutSearchConfig, build_layout_search_report, select_best_layout
+from bookforge.sequence_optimizer import (
+    apply_sequence_optimization_decisions,
+    run_sequence_optimization,
+    write_sequence_optimization_report,
+)
 from bookforge.story.prompt_compiler import compile_prompt, tighten_prompt
 from bookforge.story.story_spec import build_bible_variants, parse_story
 from bookforge.story.storyboard import generate_storyboard
@@ -1641,6 +1646,25 @@ class BookforgePipeline:
                     re_evaluated=False,
                 )
         write_targeted_regeneration_report(review / "targeted_regeneration_report.json", targeted_report)
+
+        sequence_optimization_report = run_sequence_optimization(
+            selected=selected,
+            qa_attempts=qa_attempts,
+            sequence_report=sequence_report.to_dict() if hasattr(sequence_report, "to_dict") else {},
+        )
+        sequence_optimization_report = apply_sequence_optimization_decisions(
+            selected=selected,
+            qa_attempts=qa_attempts,
+            report=sequence_optimization_report,
+        )
+        write_sequence_optimization_report(review / "sequence_optimization_report.json", sequence_optimization_report)
+        production_payload["sequence_optimization"] = {
+            "enabled": bool(sequence_optimization_report.enabled),
+            "accepted_moves": len(sequence_optimization_report.accepted_moves),
+            "net_delta": float(sequence_optimization_report.net_improvement.net_delta),
+        }
+        write_production_report(review / "production_report.json", production_payload)
+
         preprod_editorial = out / "preprod" / "editorial"
         _copy_companion_to_review(out)
         if preprod_editorial.exists():
@@ -1686,6 +1710,7 @@ class BookforgePipeline:
             "review/typography_report.json",
             "review/reselection_report.json",
             "review/targeted_regeneration_report.json",
+            "review/sequence_optimization_report.json",
             "review/hidden_world_report.json",
             "review/storefront_optimization_report.json",
             "review/character_commercial_report.json",
@@ -1811,6 +1836,25 @@ class BookforgePipeline:
                     failures.append(f"targeted_regeneration_report.json missing {field}")
         else:
             warnings.append("Missing review/targeted_regeneration_report.json")
+        sequence_optimizer_report_path = review_dir / "sequence_optimization_report.json"
+        if sequence_optimizer_report_path.exists():
+            sequence_opt = json.loads(sequence_optimizer_report_path.read_text(encoding="utf-8"))
+            for field in [
+                "enabled",
+                "config",
+                "pages_considered",
+                "candidate_moves_considered",
+                "accepted_moves",
+                "rejected_moves",
+                "cap_hit",
+                "before_summary",
+                "after_summary",
+                "net_improvement",
+            ]:
+                if field not in sequence_opt:
+                    failures.append(f"sequence_optimization_report.json missing {field}")
+        else:
+            warnings.append("Missing review/sequence_optimization_report.json")
         companion_dir = review_dir / "companion"
         story_parsed_path = out / "preprod" / "story_parsed.json"
         expects_companion = False
