@@ -55,6 +55,19 @@ class WeakClusterFinding:
     pages: List[int]
 
 
+
+
+@dataclass(frozen=True)
+class CameraSequenceFinding:
+    summary_score: float
+    adjacent_repeat_warnings: List[str]
+    medium_run_warnings: List[str]
+    progression_warnings: List[str]
+    opening_warnings: List[str]
+    climax_warnings: List[str]
+    ending_warnings: List[str]
+    repetitive_run_warnings: List[str]
+
 @dataclass(frozen=True)
 class BookSequenceReport:
     status: str
@@ -69,6 +82,7 @@ class BookSequenceReport:
     architecture_flow: ArchitectureSequenceFinding
     energy_curve: EnergyCurveFinding
     weak_clusters: List[WeakClusterFinding]
+    camera_sequence: CameraSequenceFinding
     per_page_notes: List[Dict[str, Any]]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -411,6 +425,74 @@ def _build_weak_clusters(
     return list(deduped.values())
 
 
+def _build_camera_sequence_findings(
+    page_count: int,
+    camera_sequence_plan: Dict[int, Dict[str, Any]],
+    architecture_plan: List[Dict[str, Any]],
+) -> CameraSequenceFinding:
+    rows = [camera_sequence_plan[p] for p in sorted(camera_sequence_plan.keys()) if p > 0]
+    shots = [str(r.get("shot_type", "")) for r in rows]
+    adjacent_repeat_warnings: List[str] = []
+    medium_run_warnings: List[str] = []
+    progression_warnings: List[str] = []
+    opening_warnings: List[str] = []
+    climax_warnings: List[str] = []
+    ending_warnings: List[str] = []
+    repetitive_run_warnings: List[str] = []
+
+    for i in range(1, len(rows)):
+        if shots[i] and shots[i] == shots[i - 1]:
+            adjacent_repeat_warnings.append(f"Pages {rows[i-1].get('page_number')}-{rows[i].get('page_number')} repeat shot type '{shots[i]}'.")
+
+    run = 0
+    for shot in shots:
+        if shot == "medium_interaction":
+            run += 1
+        else:
+            if run >= 3:
+                medium_run_warnings.append("Run of >=3 medium_interaction shots reduces visual variety.")
+            run = 0
+    if run >= 3:
+        medium_run_warnings.append("Run of >=3 medium_interaction shots reduces visual variety.")
+
+    for i in range(1, len(rows)):
+        d0 = str(rows[i - 1].get("target_distance_class", ""))
+        d1 = str(rows[i].get("target_distance_class", ""))
+        if d0 == d1 and d0 in {"wide", "close"}:
+            progression_warnings.append(f"Pages {rows[i-1].get('page_number')}-{rows[i].get('page_number')} have weak framing contrast.")
+
+    if rows and str(rows[0].get("shot_type", "")) != "establishing_wide":
+        opening_warnings.append("Opening page is not using establishing_wide framing.")
+
+    climax_pages = {int(r.get("page_number", 0)): str(r.get("shot_type", "")) for r in rows if str(r.get("narrative_reason", "")).startswith("climax") or str(r.get("narrative_reason", "")).startswith("reveal")}
+    all_recent = shots[:-1]
+    for p, shot in climax_pages.items():
+        if shot and shot in all_recent[-3:]:
+            climax_warnings.append(f"Page {p} climax/reveal uses recently repeated shot '{shot}'.")
+
+    if rows and str(rows[-1].get("shot_type", "")) in {"dutch_tilt", "worms_eye"}:
+        ending_warnings.append("Ending shot remains unstable/chaotic; prefer calmer return framing.")
+
+    for i in range(len(shots) - 3):
+        span = shots[i:i+4]
+        if len(set(span)) <= 2:
+            repetitive_run_warnings.append(f"Pages {i+1}-{i+4} show repetitive camera language.")
+
+    penalties = 0.12*len(adjacent_repeat_warnings)+0.08*len(medium_run_warnings)+0.07*len(progression_warnings)+0.12*len(opening_warnings)+0.1*len(climax_warnings)+0.1*len(ending_warnings)+0.08*len(repetitive_run_warnings)
+    summary_score = round(_clamp01(1.0 - penalties), 4)
+
+    return CameraSequenceFinding(
+        summary_score=summary_score,
+        adjacent_repeat_warnings=adjacent_repeat_warnings,
+        medium_run_warnings=medium_run_warnings,
+        progression_warnings=progression_warnings,
+        opening_warnings=opening_warnings,
+        climax_warnings=climax_warnings,
+        ending_warnings=ending_warnings,
+        repetitive_run_warnings=repetitive_run_warnings,
+    )
+
+
 def build_book_sequence_report(
     *,
     page_count: int,
@@ -419,12 +501,14 @@ def build_book_sequence_report(
     applied_arch_rows: List[Dict[str, Any]] | None,
     qa_attempts: List[Dict[str, Any]] | None,
     premium_qc: Dict[str, Any] | None,
+    camera_sequence_plan: Dict[int, Dict[str, Any]] | None = None,
 ) -> BookSequenceReport:
     color_script = color_script if isinstance(color_script, dict) else {}
     architecture_plan = architecture_plan if isinstance(architecture_plan, list) else []
     applied_arch_rows = applied_arch_rows if isinstance(applied_arch_rows, list) else []
     qa_attempts = qa_attempts if isinstance(qa_attempts, list) else []
     premium_qc = premium_qc if isinstance(premium_qc, dict) else {}
+    camera_sequence_plan = camera_sequence_plan if isinstance(camera_sequence_plan, dict) else {}
 
     qa_by_page = _series_from_qa_attempts(qa_attempts, page_count)
     color_pages = {
@@ -439,6 +523,7 @@ def build_book_sequence_report(
     premium_pages = premium_qc.get("pages", []) if isinstance(premium_qc.get("pages", []), list) else []
     energy_curve = _build_energy_curve(architecture_plan, applied_arch_rows, premium_pages)
     weak_clusters = _build_weak_clusters(page_count, applied_arch_rows, premium_pages, color_findings)
+    camera_sequence = _build_camera_sequence_findings(page_count, camera_sequence_plan, architecture_plan)
 
     warnings: List[str] = []
     errors: List[str] = []
@@ -451,15 +536,18 @@ def build_book_sequence_report(
         warnings.append("Applied architecture metadata absent; realized-flow proxies are limited.")
     if not premium_pages:
         warnings.append("Premium visual QC pages absent; energy and weak-cluster diagnostics are limited.")
+    if not camera_sequence_plan:
+        warnings.append("Camera sequence plan absent; cinematic diagnostics are limited.")
 
     summary_notes.extend(color_warnings)
     summary_notes.extend(architecture_flow.repeated_pattern_warnings[:2])
     summary_notes.extend(energy_curve.climax_warnings[:1])
+    summary_notes.extend(camera_sequence.opening_warnings[:1])
     if not summary_notes:
         summary_notes.append("Sequence diagnostics completed with no major warnings.")
 
     overall = round(
-        _clamp01(0.35 * color_score + 0.35 * architecture_flow.summary_score + 0.30 * energy_curve.mismatch_score),
+        _clamp01(0.30 * color_score + 0.30 * architecture_flow.summary_score + 0.25 * energy_curve.mismatch_score + 0.15 * camera_sequence.summary_score),
         4,
     )
 
@@ -475,6 +563,7 @@ def build_book_sequence_report(
                     next((r.get("score") for r in premium_pages if _safe_page_int(r.get("page")) == p), 0.0) or 0.0
                 ),
                 "color_transition_to_page_score": next((f.score for f in color_findings if f.to_page == p), None),
+                "shot_type": str((camera_sequence_plan.get(p) or {}).get("shot_type", "")),
             }
         )
 
@@ -491,6 +580,7 @@ def build_book_sequence_report(
         architecture_flow=architecture_flow,
         energy_curve=energy_curve,
         weak_clusters=weak_clusters,
+        camera_sequence=camera_sequence,
         per_page_notes=per_page_notes,
     )
 

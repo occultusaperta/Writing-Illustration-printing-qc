@@ -37,6 +37,8 @@ from bookforge.page_architecture.prompting import build_architecture_negative_li
 from bookforge.page_architecture.templates import architecture_templates
 from bookforge.page_architecture.types import to_primitive as arch_to_primitive
 from bookforge.page_architecture.layout_apply import build_layout_application_map
+from bookforge.camera_language import plan_camera_sequence, write_planning_artifact as write_camera_planning_artifact
+from bookforge.camera_language.prompting import build_camera_guidance, build_camera_negative_lines, build_camera_prompt_lines
 from bookforge.profiles import apply_profile, load_profile
 from bookforge.qc.image_qc import choose_best_variant, write_qa_report
 from bookforge.qc.kdp_preflight import KDPPreflight
@@ -91,14 +93,20 @@ def _build_planning_prompt_guidance(out: Path) -> Dict[int, Dict[str, Any]]:
     color_payload = _load_json_if_exists(planning_dir / "color_script.json") or {}
     emotion_payload = _load_json_if_exists(planning_dir / "emotion_analysis.json") or []
     arch_plan = _load_json_if_exists(planning_dir / "architecture_plan.json") or []
+    camera_plan = _load_json_if_exists(planning_dir / "camera_sequence_plan.json") or {}
 
     emotion_by_page = {int(x.get("page_number", 0)): x for x in emotion_payload if isinstance(x, dict)}
     color_by_page = {int(x.get("page_number", 0)): x for x in color_payload.get("pages", []) if isinstance(x, dict)}
     arch_by_page = {int(x.get("page_number", 0)): x for x in arch_plan if isinstance(x, dict)}
+    camera_by_page = {
+        int(x.get("page_number", 0)): x
+        for x in (camera_plan.get("pages", []) if isinstance(camera_plan, dict) else [])
+        if isinstance(x, dict)
+    }
 
     variants = {v.variant_id: v for v in architecture_templates()}
 
-    page_numbers = sorted(set(color_by_page.keys()) | set(arch_by_page.keys()) | set(emotion_by_page.keys()))
+    page_numbers = sorted(set(color_by_page.keys()) | set(arch_by_page.keys()) | set(emotion_by_page.keys()) | set(camera_by_page.keys()))
     guidance: Dict[int, Dict[str, Any]] = {}
     for page_no in page_numbers:
         color_g = build_color_script_guidance(color_by_page.get(page_no), emotion_by_page.get(page_no))
@@ -109,11 +117,13 @@ def _build_planning_prompt_guidance(out: Path) -> Dict[int, Dict[str, Any]]:
             if selected_variant in variants:
                 variant = {"zones": [arch_to_primitive(z) for z in variants[selected_variant].zones]}
         arch_g = build_page_architecture_guidance(plan, variant)
-        prompt_lines = build_color_prompt_lines(color_g) + build_architecture_prompt_lines(arch_g)
-        negative_lines = build_color_negative_lines(color_g) + build_architecture_negative_lines(arch_g)
+        camera_g = build_camera_guidance(camera_by_page.get(page_no))
+        prompt_lines = build_color_prompt_lines(color_g) + build_architecture_prompt_lines(arch_g) + build_camera_prompt_lines(camera_g)
+        negative_lines = build_color_negative_lines(color_g) + build_architecture_negative_lines(arch_g) + build_camera_negative_lines(camera_g)
         guidance[page_no] = {
             "color_script_guidance": color_g,
             "page_architecture_guidance": arch_g,
+            "camera_language_guidance": camera_g,
             "prompt_lines": prompt_lines,
             "negative_lines": negative_lines,
         }
@@ -135,6 +145,15 @@ def _load_architecture_plan(out: Path) -> List[Dict[str, Any]]:
     planning_dir = out / "preprod" / "planning"
     arch_plan = _load_json_if_exists(planning_dir / "architecture_plan.json") or []
     return arch_plan if isinstance(arch_plan, list) else []
+
+
+def _load_camera_sequence_plan(out: Path) -> Dict[int, Dict[str, Any]]:
+    planning_dir = out / "preprod" / "planning"
+    payload = _load_json_if_exists(planning_dir / "camera_sequence_plan.json") or {}
+    if not isinstance(payload, dict):
+        return {}
+    rows = payload.get("pages", []) if isinstance(payload.get("pages", []), list) else []
+    return {int(row.get("page_number", 0)): row for row in rows if isinstance(row, dict) and int(row.get("page_number", 0)) > 0}
 
 def _load_architecture_scoring_context(out: Path) -> Dict[int, Dict[str, Any]]:
     planning_dir = out / "preprod" / "planning"
@@ -365,14 +384,19 @@ class BookforgePipeline:
         if _feature_flag("BOOKFORGE_COLOR_SCRIPT", default="true"):
             analyses, master_palette, page_specs, transitions = plan_color_script(parsed.get("pages", []))
             write_color_planning_artifacts(planning_dir, analyses, master_palette, page_specs, transitions)
+        source_pages = []
+        if (planning_dir / "emotion_analysis.json").exists():
+            source_pages = json.loads((planning_dir / "emotion_analysis.json").read_text(encoding="utf-8"))
+        else:
+            source_pages = [{"page_number": p.get("page_number", i + 1), "narrative_function": "rising_action", "text": p.get("text", "")} for i, p in enumerate(parsed.get("pages", []))]
+
         if _feature_flag("BOOKFORGE_PAGE_ARCHITECTURE", default="true"):
-            source_pages = []
-            if (planning_dir / "emotion_analysis.json").exists():
-                source_pages = json.loads((planning_dir / "emotion_analysis.json").read_text(encoding="utf-8"))
-            else:
-                source_pages = [{"page_number": p.get("page_number", i + 1), "narrative_function": "rising_action"} for i, p in enumerate(parsed.get("pages", []))]
             architecture_plan, architecture_report = plan_architecture_sequence(source_pages, genre="picture_book")
             write_arch_planning_artifacts(planning_dir, architecture_plan, architecture_report)
+
+        if _feature_flag("BOOKFORGE_CAMERA_LANGUAGE", default="true"):
+            camera_plan = plan_camera_sequence(source_pages)
+            write_camera_planning_artifact(planning_dir, camera_plan)
 
         trim_w, trim_h = parse_trim_size(size)
         req_w = int((trim_w + 2 * self.bleed_in) * 300)
@@ -793,6 +817,7 @@ class BookforgePipeline:
         planning_prompt_guidance = _build_planning_prompt_guidance(out)
         color_spec_by_page, master_palette = _load_color_scoring_context(out)
         architecture_by_page = _load_architecture_scoring_context(out)
+        camera_by_page = _load_camera_sequence_plan(out) if _feature_flag("BOOKFORGE_CAMERA_LANGUAGE", default="true") else {}
         _studio_debug("studio start: building prompts")
         turn_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("page_turn_map", []) if isinstance(x, dict)}
         artifact_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("resolved_artifacts_map", []) if isinstance(x, dict)}
@@ -886,6 +911,7 @@ class BookforgePipeline:
                 page_text=str(page.get("text", "")),
                 architecture_variant=architecture_by_page.get(no),
                 age_range=str(lock.get("editorial", {}).get("age_band", "")),
+                shot_plan_entry=camera_by_page.get(no),
             )
             qa_attempts.append({"page": no, "attempt": 1, **qa})
             rounds = 0
@@ -913,6 +939,7 @@ class BookforgePipeline:
                     page_text=str(page.get("text", "")),
                     architecture_variant=architecture_by_page.get(no),
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
+                    shot_plan_entry=camera_by_page.get(no),
                 )
                 if qa.get("best", {}).get("focus_bleed_overlap", 0.0) > lock["qa"].get("max_focus_bleed_overlap", 0.15):
                     hard_prompt = f"{hard_prompt} subject centered within safe area, keep key action away from edges"
@@ -970,6 +997,7 @@ class BookforgePipeline:
                     page_text=str(parsed["pages"][a - 1].get("text", "")) if a - 1 < len(parsed["pages"]) else "",
                     architecture_variant=architecture_by_page.get(a),
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
+                    shot_plan_entry=camera_by_page.get(a),
                 )
                 qa_attempts.append({"page": f"{a}-{b}", "attempt": spread_round, "spread": True, **spread_qa})
                 if not spread_qa["passes"]:
@@ -986,6 +1014,7 @@ class BookforgePipeline:
                     page_text=str(parsed["pages"][a - 1].get("text", "")) if a - 1 < len(parsed["pages"]) else "",
                     architecture_variant=architecture_by_page.get(a),
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
+                    shot_plan_entry=camera_by_page.get(a),
                 )
                 right_best, right_qa = choose_best_variant(
                     [Path(selected[b - 1])],
@@ -998,6 +1027,7 @@ class BookforgePipeline:
                     page_text=str(parsed["pages"][b - 1].get("text", "")) if b - 1 < len(parsed["pages"]) else "",
                     architecture_variant=architecture_by_page.get(b),
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
+                    shot_plan_entry=camera_by_page.get(b),
                 )
                 qa_attempts.append({"page": a, "attempt": spread_round, "spread_half": "left", **left_qa})
                 qa_attempts.append({"page": b, "attempt": spread_round, "spread_half": "right", **right_qa})
@@ -1109,6 +1139,7 @@ class BookforgePipeline:
             applied_arch_rows=applied_arch_review,
             qa_attempts=qa_attempts,
             premium_qc=premium_qc,
+            camera_sequence_plan=camera_by_page,
         )
         write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
 
@@ -1143,6 +1174,7 @@ class BookforgePipeline:
                     applied_arch_rows=applied_arch_review,
                     qa_attempts=qa_attempts,
                     premium_qc=premium_qc,
+                    camera_sequence_plan=camera_by_page,
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
@@ -1247,6 +1279,7 @@ class BookforgePipeline:
                     page_text=str(parsed["pages"][page_no - 1].get("text", "")) if page_no - 1 < len(parsed["pages"]) else "",
                     architecture_variant=architecture_by_page.get(page_no),
                     age_range=str(lock.get("editorial", {}).get("age_band", "")),
+                    shot_plan_entry=camera_by_page.get(page_no),
                 )
                 generated_candidates[page_no] = regen_qa.get("best", {})
 
@@ -1275,6 +1308,7 @@ class BookforgePipeline:
                     applied_arch_rows=applied_arch_review,
                     qa_attempts=qa_attempts,
                     premium_qc=premium_qc,
+                    camera_sequence_plan=camera_by_page,
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)

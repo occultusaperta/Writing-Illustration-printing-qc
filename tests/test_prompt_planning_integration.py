@@ -39,8 +39,10 @@ def test_prompt_contract_backward_compatible_without_planning():
     assert contract["version"] == "premium_prompt_contract_v1"
     assert "color_script_guidance" in obj["metadata"]
     assert "page_architecture_guidance" in obj["metadata"]
+    assert "camera_language_guidance" in obj["metadata"]
     assert obj["metadata"]["color_script_guidance"] == {}
     assert obj["metadata"]["page_architecture_guidance"] == {}
+    assert obj["metadata"]["camera_language_guidance"] == {}
 
 
 def test_color_prompt_metadata_generation():
@@ -94,11 +96,16 @@ def test_pipeline_prompt_guidance_loading_with_and_without_planning(tmp_path: Pa
         json.dumps([{"page_number": 1, "narrative_function": "opening", "target_energy": 0.4, "selected_variant_id": "vignette_centered", "selected_architecture_type": "vignette", "score": 0.8}]),
         encoding="utf-8",
     )
+    (planning / "camera_sequence_plan.json").write_text(
+        json.dumps({"pages": [{"page_number": 1, "shot_type": "establishing_wide", "target_distance_class": "wide", "target_angle_class": "level", "target_subject_focus": "Mara", "narrative_reason": "opening beat", "sequence_priority": 1.0}]}),
+        encoding="utf-8",
+    )
 
     guidance = _build_planning_prompt_guidance(out)
     assert 1 in guidance
     assert guidance[1]["color_script_guidance"]["emotion"] == "calm"
     assert guidance[1]["page_architecture_guidance"]["architecture_type"] == "vignette"
+    assert guidance[1]["camera_language_guidance"]["shot_type"] == "establishing_wide"
 
     empty = _build_planning_prompt_guidance(tmp_path / "missing")
     assert empty == {}
@@ -110,6 +117,7 @@ def test_prompt_contract_includes_planning_guidance_and_negatives():
         1: {
             "color_script_guidance": {"emotion": "joy"},
             "page_architecture_guidance": {"architecture_type": "panel_sequence"},
+            "camera_language_guidance": {"shot_type": "closeup_emotion"},
             "prompt_lines": ["Color script: predominantly warm amber, honey, and golden tones."],
             "negative_lines": ["avoid composition that conflicts with architecture intent"],
         }
@@ -119,3 +127,4 @@ def test_prompt_contract_includes_planning_guidance_and_negatives():
     assert "predominantly warm amber" in obj["prompt_text"]
     assert "avoid composition that conflicts with architecture intent" in obj["negative_prompt"]
     assert obj["metadata"]["page_architecture_guidance"]["architecture_type"] == "panel_sequence"
+    assert obj["metadata"]["camera_language_guidance"]["shot_type"] == "closeup_emotion"
