@@ -6,10 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from PIL import Image
-
-
-def _clamp01(value: float) -> float:
-    return float(max(0.0, min(1.0, value)))
+from bookforge.utils import clamp01
 
 
 @dataclass(frozen=True)
@@ -76,7 +73,7 @@ def _score_local(candidate: Dict[str, Any]) -> float:
     ensemble = ((metadata.get("visual_ensemble") or {}).get("ensemble_score", 0.5)) if isinstance(metadata, dict) else 0.5
     arch = ((metadata.get("page_architecture_score") or {}).get("composite_score", 0.5)) if isinstance(metadata, dict) else 0.5
     saliency = ((metadata.get("saliency_flow_score") or {}).get("composite_score", 0.5)) if isinstance(metadata, dict) else 0.5
-    return round(_clamp01(0.37 * float(color) + 0.33 * float(ensemble) + 0.22 * float(arch) + 0.08 * float(saliency)), 6)
+    return round(clamp01(0.37 * float(color) + 0.33 * float(ensemble) + 0.22 * float(arch) + 0.08 * float(saliency)), 6)
 
 
 def _transition_target(mode: str, strength: float) -> float:
@@ -89,7 +86,7 @@ def _score_sequence_support(page: int, candidate: Dict[str, Any], sequence_repor
     drift = float(candidate.get("page_to_page_hist_drift", 0.0) or 0.0)
     if transition:
         target = _transition_target(str(transition.get("expected_mode", "blend")), float(transition.get("expected_strength", 0.5) or 0.5))
-        transition_fit = _clamp01(1.0 - abs(drift - target))
+        transition_fit = clamp01(1.0 - abs(drift - target))
     else:
         transition_fit = 0.5
 
@@ -97,7 +94,7 @@ def _score_sequence_support(page: int, candidate: Dict[str, Any], sequence_repor
     ensemble = float(((metadata.get("visual_ensemble") or {}).get("ensemble_score", 0.5)) or 0.5)
     arch = float(((metadata.get("page_architecture_score") or {}).get("composite_score", 0.5)) or 0.5)
 
-    return round(_clamp01(0.5 * transition_fit + 0.3 * ensemble + 0.2 * arch), 6)
+    return round(clamp01(0.5 * transition_fit + 0.3 * ensemble + 0.2 * arch), 6)
 
 
 def _sequence_flagged_pages(sequence_report: Dict[str, Any]) -> set[int]:
@@ -217,13 +214,13 @@ def run_bounded_reselection(
 
         current_local = _score_local(best)
         current_seq = _score_sequence_support(page, best, sequence_report)
-        current_comp = _clamp01(0.7 * current_local + 0.3 * current_seq)
+        current_comp = clamp01(0.7 * current_local + 0.3 * current_seq)
 
         best_comp: CandidateComparison | None = None
         for candidate in runner_ups:
             cand_local = _score_local(candidate)
             cand_seq = _score_sequence_support(page, candidate, sequence_report)
-            cand_comp = _clamp01(0.7 * cand_local + 0.3 * cand_seq)
+            cand_comp = clamp01(0.7 * cand_local + 0.3 * cand_seq)
             local_delta = round(cand_local - current_local, 6)
             seq_delta = round(cand_seq - current_seq, 6)
             comp_delta = round(cand_comp - current_comp, 6)

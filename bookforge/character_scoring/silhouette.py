@@ -7,10 +7,7 @@ import numpy as np
 from PIL import Image
 
 from bookforge.character_scoring.types import SilhouetteScoreResult
-
-
-def _clamp01(value: float) -> float:
-    return float(max(0.0, min(1.0, value)))
+from bookforge.utils import clamp01
 
 
 def _load_rgb(path: str | Path) -> np.ndarray:
@@ -82,17 +79,17 @@ def score_character_silhouette(image_path: str | Path) -> SilhouetteScoreResult:
     hor_transitions = np.count_nonzero(mask[:, 1:] != mask[:, :-1])
     perimeter = float(vert_transitions + hor_transitions)
 
-    compactness = _clamp01((4.0 * math.pi * area) / max(perimeter * perimeter, 1.0))
+    compactness = clamp01((4.0 * math.pi * area) / max(perimeter * perimeter, 1.0))
     transition_density = perimeter / max(area, 1.0)
-    edge_complexity_score = _clamp01(1.0 - abs(transition_density - 0.17) / 0.2)
+    edge_complexity_score = clamp01(1.0 - abs(transition_density - 0.17) / 0.2)
 
     bbox_fill = area / float(box_h * box_w)
     aspect = box_w / max(float(box_h), 1.0)
-    aspect_score = _clamp01(1.0 - abs(aspect - 0.75) / 0.95)
-    distinguishability = _clamp01(0.45 * bbox_fill + 0.35 * aspect_score + 0.2 * (1.0 - abs(occupancy - 0.34) / 0.34))
+    aspect_score = clamp01(1.0 - abs(aspect - 0.75) / 0.95)
+    distinguishability = clamp01(0.45 * bbox_fill + 0.35 * aspect_score + 0.2 * (1.0 - abs(occupancy - 0.34) / 0.34))
 
-    iconic = _clamp01(0.45 * compactness + 0.35 * edge_complexity_score + 0.2 * distinguishability)
-    composite = _clamp01(0.35 * compactness + 0.3 * edge_complexity_score + 0.35 * distinguishability)
+    iconic = clamp01(0.45 * compactness + 0.35 * edge_complexity_score + 0.2 * distinguishability)
+    composite = clamp01(0.35 * compactness + 0.3 * edge_complexity_score + 0.35 * distinguishability)
 
     if edge_complexity_score < 0.3:
         warnings.append("Silhouette may be too noisy or brittle for iconic readability/plush translation.")
@@ -101,7 +98,7 @@ def score_character_silhouette(image_path: str | Path) -> SilhouetteScoreResult:
     if occupancy > 0.75:
         warnings.append("Subject occupancy is very high; icon-like contour readability may be reduced.")
 
-    confidence = _clamp01(0.2 + min(0.6, occupancy * 1.4) + min(0.2, box_h / max(h, 1) * 0.2))
+    confidence = clamp01(0.2 + min(0.6, occupancy * 1.4) + min(0.2, box_h / max(h, 1) * 0.2))
 
     return SilhouetteScoreResult(
         subject_occupancy=round(occupancy, 4),

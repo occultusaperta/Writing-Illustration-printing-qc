@@ -5,10 +5,7 @@ from typing import Any, Dict
 from bookforge.dual_audience.adult_channel import score_adult_channel
 from bookforge.dual_audience.child_channel import score_child_channel
 from bookforge.dual_audience.types import DualAudienceScoreResult
-
-
-def _clamp01(v: float) -> float:
-    return float(max(0.0, min(1.0, v)))
+from bookforge.utils import clamp01
 
 
 def score_dual_audience(
@@ -21,8 +18,8 @@ def score_dual_audience(
     adult = score_adult_channel(report, metadata)
 
     divergence = abs(child.composite_score - adult.composite_score)
-    balance_score = _clamp01(1.0 - (divergence / 0.6))
-    balance_penalty = _clamp01(max(0.0, divergence - 0.2) * 0.5)
+    balance_score = clamp01(1.0 - (divergence / 0.6))
+    balance_penalty = clamp01(max(0.0, divergence - 0.2) * 0.5)
 
     base = 0.52 * child.composite_score + 0.48 * adult.composite_score
     threshold_penalty = 0.0
@@ -39,7 +36,7 @@ def score_dual_audience(
     if balance_score > 0.8:
         notes.append("Child/adult channels are reasonably balanced.")
 
-    composite = _clamp01(base + 0.06 * balance_score - balance_penalty - threshold_penalty)
+    composite = clamp01(base + 0.06 * balance_score - balance_penalty - threshold_penalty)
     recommend_reject = bool(child.composite_score < 0.22 and adult.composite_score < 0.22)
     if recommend_reject:
         warnings.append("dual_audience_recommend_reject_both_channels_very_weak")
@@ -49,7 +46,7 @@ def score_dual_audience(
         "Does not claim true child testing or parent preference certainty.",
         "Used as an additive quality layer; not a standalone decision system.",
     ]
-    confidence = _clamp01(0.45 + 0.25 * min(child.confidence, adult.confidence) + 0.2 * ((child.confidence + adult.confidence) / 2.0) + 0.1 * balance_score)
+    confidence = clamp01(0.45 + 0.25 * min(child.confidence, adult.confidence) + 0.2 * ((child.confidence + adult.confidence) / 2.0) + 0.1 * balance_score)
 
     warnings.extend(child.warnings)
     warnings.extend(adult.warnings)

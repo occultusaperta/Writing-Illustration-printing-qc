@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from PIL import Image
 
 from bookforge.review.reselection import _score_local, _score_sequence_support
+from bookforge.utils import clamp01
 
 
 @dataclass(frozen=True)
@@ -82,10 +83,6 @@ class RegenerationRunReport:
 def write_targeted_regeneration_report(path: Path, report: RegenerationRunReport) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
-
-
-def _clamp01(value: float) -> float:
-    return float(max(0.0, min(1.0, value)))
 
 
 def _weak_dimensions(candidate: Dict[str, Any]) -> List[str]:
@@ -272,11 +269,11 @@ def apply_targeted_regeneration_decisions(
         previous = previous_candidates.get(page, {"path": previous_path, "metadata": {}})
         local_prev = _score_local(previous)
         seq_prev = _score_sequence_support(page, previous, sequence_report)
-        comp_prev = _clamp01(0.7 * local_prev + 0.3 * seq_prev)
+        comp_prev = clamp01(0.7 * local_prev + 0.3 * seq_prev)
 
         local_new = _score_local(candidate_best)
         seq_new = _score_sequence_support(page, candidate_best, sequence_report)
-        comp_new = _clamp01(0.7 * local_new + 0.3 * seq_new)
+        comp_new = clamp01(0.7 * local_new + 0.3 * seq_new)
 
         local_delta = round(local_new - local_prev, 6)
         seq_delta = round(seq_new - seq_prev, 6)

@@ -6,10 +6,7 @@ from bookforge.character_scoring.baby_schema import score_baby_schema
 from bookforge.character_scoring.silhouette import score_character_silhouette
 from bookforge.character_scoring.toyetic import score_toyetic
 from bookforge.character_scoring.types import CharacterCommercialScoreResult
-
-
-def _clamp01(value: float) -> float:
-    return float(max(0.0, min(1.0, value)))
+from bookforge.utils import clamp01
 
 
 def score_character_commercial(image_path: str | Path) -> CharacterCommercialScoreResult:
@@ -17,12 +14,12 @@ def score_character_commercial(image_path: str | Path) -> CharacterCommercialSco
     baby = score_baby_schema(image_path, generalized_mode=True)
     toyetic = score_toyetic(image_path, silhouette)
 
-    lead_strength = _clamp01(0.52 * baby.composite_score + 0.48 * toyetic.composite_score)
-    recognizability = _clamp01(0.55 * silhouette.distinguishability_score + 0.45 * toyetic.signature_feature_score)
-    plush_series = _clamp01(0.5 * toyetic.plush_friendliness_score + 0.3 * silhouette.iconic_readability_score + 0.2 * toyetic.small_scale_recognizability_score)
+    lead_strength = clamp01(0.52 * baby.composite_score + 0.48 * toyetic.composite_score)
+    recognizability = clamp01(0.55 * silhouette.distinguishability_score + 0.45 * toyetic.signature_feature_score)
+    plush_series = clamp01(0.5 * toyetic.plush_friendliness_score + 0.3 * silhouette.iconic_readability_score + 0.2 * toyetic.small_scale_recognizability_score)
 
-    composite = _clamp01(0.38 * lead_strength + 0.34 * recognizability + 0.28 * plush_series)
-    confidence = _clamp01(0.3 + 0.35 * baby.confidence + 0.35 * toyetic.confidence)
+    composite = clamp01(0.38 * lead_strength + 0.34 * recognizability + 0.28 * plush_series)
+    confidence = clamp01(0.3 + 0.35 * baby.confidence + 0.35 * toyetic.confidence)
 
     warnings = list(dict.fromkeys(baby.warnings + toyetic.warnings + silhouette.warnings))
     notes = list(dict.fromkeys(baby.notes + toyetic.notes + silhouette.notes))

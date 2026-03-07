@@ -14,10 +14,7 @@ from bookforge.hidden_world import build_hidden_world_sequence_finding
 from bookforge.hidden_world.types import HiddenWorldSequenceFinding
 from bookforge.dual_audience.sequence import build_dual_audience_report
 from bookforge.page_turn import build_page_turn_tension_report
-
-
-def _clamp01(value: float) -> float:
-    return float(max(0.0, min(1.0, value)))
+from bookforge.utils import clamp01
 
 
 @dataclass(frozen=True)
@@ -146,8 +143,8 @@ def _build_color_transition_findings(
             severity = abs(realized_delta - max(0.45, expected_strength * 0.8))
         else:
             severity = abs(realized_delta - min(0.22, expected_strength * 0.45))
-        severity = _clamp01(severity)
-        score = _clamp01(1.0 - severity)
+        severity = clamp01(severity)
+        score = clamp01(1.0 - severity)
 
         notes: List[str] = []
         warnings: List[str] = []
@@ -228,7 +225,7 @@ def _build_architecture_flow(
         energies.append(float(plan.get("target_energy", 0.5) or 0.5))
 
     unique = len(set(arch_types))
-    variety_score = round(_clamp01(unique / max(3, len(arch_types) * 0.5)), 4) if arch_types else 1.0
+    variety_score = round(clamp01(unique / max(3, len(arch_types) * 0.5)), 4) if arch_types else 1.0
 
     streak_type = ""
     streak_start = 0
@@ -280,7 +277,7 @@ def _build_architecture_flow(
         + 0.08 * len(text_heavy_cluster_warnings)
         + 0.08 * len(relief_warnings)
     )
-    summary_score = round(_clamp01(variety_score - penalties), 4)
+    summary_score = round(clamp01(variety_score - penalties), 4)
 
     return ArchitectureSequenceFinding(
         architecture_variety_score=variety_score,
@@ -325,7 +322,7 @@ def _build_energy_curve(
         arch_type = str(applied_by_page.get(p, {}).get("architecture_type") or plan_by_page.get(p, {}).get("selected_architecture_type") or "")
         arch_proxy = energy_map.get(arch_type, 0.5)
         visual_proxy = float((qc_by_page.get(p, {}).get("visual_critic_scores", {}) or {}).get("composition_score", 0.5) or 0.5)
-        realized = _clamp01(0.6 * arch_proxy + 0.4 * visual_proxy)
+        realized = clamp01(0.6 * arch_proxy + 0.4 * visual_proxy)
         target_curve.append(target)
         realized_curve.append(realized)
 
@@ -345,7 +342,7 @@ def _build_energy_curve(
             ending_warnings.append("Ending remains visually energetic instead of resolving.")
 
     diffs = [abs(t - r) for t, r in zip(target_curve, realized_curve)]
-    mismatch = round(_clamp01(1.0 - (mean(diffs) if diffs else 0.0)), 4)
+    mismatch = round(clamp01(1.0 - (mean(diffs) if diffs else 0.0)), 4)
 
     return EnergyCurveFinding(
         target_curve=[round(v, 4) for v in target_curve],
@@ -495,7 +492,7 @@ def _build_camera_sequence_findings(
             repetitive_run_warnings.append(f"Pages {i+1}-{i+4} show repetitive camera language.")
 
     penalties = 0.12*len(adjacent_repeat_warnings)+0.08*len(medium_run_warnings)+0.07*len(progression_warnings)+0.12*len(opening_warnings)+0.1*len(climax_warnings)+0.1*len(ending_warnings)+0.08*len(repetitive_run_warnings)
-    summary_score = round(_clamp01(1.0 - penalties), 4)
+    summary_score = round(clamp01(1.0 - penalties), 4)
 
     return CameraSequenceFinding(
         summary_score=summary_score,
@@ -597,7 +594,7 @@ def build_book_sequence_report(
         summary_notes.append("Sequence diagnostics completed with no major warnings.")
 
     overall = round(
-        _clamp01(0.195 * color_score + 0.175 * architecture_flow.summary_score + 0.15 * energy_curve.mismatch_score + 0.11 * camera_sequence.summary_score + 0.1 * saliency_flow_sequence.summary_score + 0.09 * typography_sequence.summary_score + 0.09 * hidden_world_sequence.summary_score + 0.08 * dual_audience_report.summary_score + 0.01 * page_turn_report.summary_score),
+        clamp01(0.195 * color_score + 0.175 * architecture_flow.summary_score + 0.15 * energy_curve.mismatch_score + 0.11 * camera_sequence.summary_score + 0.1 * saliency_flow_sequence.summary_score + 0.09 * typography_sequence.summary_score + 0.09 * hidden_world_sequence.summary_score + 0.08 * dual_audience_report.summary_score + 0.01 * page_turn_report.summary_score),
         4,
     )
 

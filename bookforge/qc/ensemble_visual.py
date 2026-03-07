@@ -6,6 +6,7 @@ from typing import Any, Sequence
 
 import numpy as np
 from PIL import Image, ImageFilter
+from bookforge.utils import clamp01
 
 try:
     import torch
@@ -35,10 +36,6 @@ _WEIGHTS = {
     "artifact_score": 0.20,
     "perceptual_quality": 0.20,
 }
-
-
-def _clamp01(value: float) -> float:
-    return float(np.clip(value, 0.0, 1.0))
 
 
 def _load_rgb(image: Image.Image | np.ndarray | Path | str) -> np.ndarray:
@@ -81,10 +78,10 @@ def _composition_score(gray: np.ndarray) -> float:
     tx = float(np.min(np.abs(thirds_x - cx)))
     ty = float(np.min(np.abs(thirds_y - cy)))
     thirds_dist = np.hypot(tx / max(w, 1), ty / max(h, 1))
-    thirds_score = _clamp01(1.0 - thirds_dist * 2.2)
+    thirds_score = clamp01(1.0 - thirds_dist * 2.2)
 
     center_dist = np.hypot((cx - (w * 0.5)) / max(w, 1), (cy - (h * 0.5)) / max(h, 1))
-    focal_score = _clamp01(1.0 - center_dist * 1.8)
+    focal_score = clamp01(1.0 - center_dist * 1.8)
 
     thirds_grid_x = np.array_split(np.arange(w), 3)
     thirds_grid_y = np.array_split(np.arange(h), 3)
@@ -96,15 +93,15 @@ def _composition_score(gray: np.ndarray) -> float:
     ]
     mean_energy = float(np.mean(cell_energy)) + 1e-8
     balance_cv = float(np.std(cell_energy) / mean_energy)
-    balance_score = _clamp01(1.0 - balance_cv / 1.5)
+    balance_score = clamp01(1.0 - balance_cv / 1.5)
 
-    return _clamp01(0.45 * thirds_score + 0.25 * focal_score + 0.30 * balance_score)
+    return clamp01(0.45 * thirds_score + 0.25 * focal_score + 0.30 * balance_score)
 
 
 def _clarity_score(gray: np.ndarray) -> float:
     lap = -4.0 * gray + np.roll(gray, 1, 0) + np.roll(gray, -1, 0) + np.roll(gray, 1, 1) + np.roll(gray, -1, 1)
     var = float(np.var(lap[1:-1, 1:-1]))
-    return _clamp01(var / (var + 220.0))
+    return clamp01(var / (var + 220.0))
 
 
 def _texture_score(gray: np.ndarray) -> float:
@@ -116,7 +113,7 @@ def _texture_score(gray: np.ndarray) -> float:
     rr = np.sqrt((yy - h / 2.0) ** 2 + (xx - w / 2.0) ** 2)
     high = rr > (0.25 * min(h, w))
     ratio = float(energy[high].sum() / (energy.sum() + 1e-8))
-    return _clamp01((ratio - 0.05) / 0.50)
+    return clamp01((ratio - 0.05) / 0.50)
 
 
 def _artifact_score(gray: np.ndarray) -> float:
@@ -145,8 +142,8 @@ def _artifact_score(gray: np.ndarray) -> float:
     non_block_y = float(np.delete(gy, by_idx, axis=0).mean()) if gy.shape[0] > len(by_idx) else 0.0
     blockiness = max(0.0, (block_x - non_block_x) / (non_block_x + 1e-6)) + max(0.0, (block_y - non_block_y) / (non_block_y + 1e-6))
 
-    artifact_level = _clamp01(0.35 * banding_level + 0.25 * _clamp01(noise_level) + 0.40 * _clamp01(blockiness / 2.0))
-    return _clamp01(1.0 - artifact_level)
+    artifact_level = clamp01(0.35 * banding_level + 0.25 * clamp01(noise_level) + 0.40 * clamp01(blockiness / 2.0))
+    return clamp01(1.0 - artifact_level)
 
 
 def _ssim(gray_a: np.ndarray, gray_b: np.ndarray) -> float:
@@ -161,7 +158,7 @@ def _ssim(gray_a: np.ndarray, gray_b: np.ndarray) -> float:
     cov = float(((a - mu_a) * (b - mu_b)).mean())
     num = (2 * mu_a * mu_b + c1) * (2 * cov + c2)
     den = (mu_a**2 + mu_b**2 + c1) * (var_a + var_b + c2)
-    return _clamp01(num / (den + 1e-8))
+    return clamp01(num / (den + 1e-8))
 
 
 def _perceptual_quality(rgb: np.ndarray, gray: np.ndarray) -> float:
@@ -170,7 +167,7 @@ def _perceptual_quality(rgb: np.ndarray, gray: np.ndarray) -> float:
 
 
 def _ensemble_from_scores(scores: dict[str, float]) -> float:
-    return _clamp01(sum(scores[k] * _WEIGHTS[k] for k in _WEIGHTS))
+    return clamp01(sum(scores[k] * _WEIGHTS[k] for k in _WEIGHTS))
 
 
 def evaluate_visual_ensemble(image: Image.Image | np.ndarray | Path | str) -> VisualEnsembleResult:

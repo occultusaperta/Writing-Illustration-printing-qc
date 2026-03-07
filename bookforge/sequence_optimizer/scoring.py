@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
-
-
-def clamp01(value: float) -> float:
-    return float(max(0.0, min(1.0, value)))
+from bookforge.utils import clamp01
 
 
 def local_score_bundle(candidate: Dict[str, Any]) -> Dict[str, float]:

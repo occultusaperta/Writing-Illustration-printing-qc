@@ -3,10 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Tuple
 
 from bookforge.dual_audience.types import AdultChannelScoreResult
-
-
-def _clamp01(v: float) -> float:
-    return float(max(0.0, min(1.0, v)))
+from bookforge.utils import clamp01
 
 
 def _composition_maturity(metadata: Dict[str, Any]) -> Tuple[float, list[str], list[str]]:
@@ -18,7 +15,7 @@ def _composition_maturity(metadata: Dict[str, Any]) -> Tuple[float, list[str], l
     composition = float(ensemble.get("composition_score", 0.5) or 0.5)
     architecture = float(arch.get("composite_score", 0.5) or 0.5)
     shot_score = float(shot.get("composite_score", 0.5) or 0.5)
-    score = _clamp01(0.42 * composition + 0.36 * architecture + 0.22 * shot_score)
+    score = clamp01(0.42 * composition + 0.36 * architecture + 0.22 * shot_score)
     if score < 0.45:
         warnings.append("adult_composition_maturity_weak")
     else:
@@ -33,7 +30,7 @@ def _color_harmony(report: Dict[str, Any], metadata: Dict[str, Any]) -> Tuple[fl
     color_comp = float(color.get("composite_score", 0.5) or 0.5)
     drift = float(report.get("page_to_page_hist_drift", 0.0) or 0.0)
     style = float(report.get("style_hist_similarity", 0.5) or 0.5)
-    score = _clamp01(0.5 * color_comp + 0.25 * style + 0.25 * (1.0 - min(1.0, drift * 1.4)))
+    score = clamp01(0.5 * color_comp + 0.25 * style + 0.25 * (1.0 - min(1.0, drift * 1.4)))
     if score < 0.45:
         warnings.append("adult_color_mood_coherence_weak")
     return score, warnings, notes
@@ -48,7 +45,7 @@ def _aesthetic_polish(report: Dict[str, Any], metadata: Dict[str, Any]) -> Tuple
     artifacts = float(ensemble.get("artifact_score", 0.5) or 0.5)
     perceptual = float(ensemble.get("perceptual_quality", 0.5) or 0.5)
     border_artifact = float(report.get("border_artifact_score", 0.0) or 0.0)
-    score = _clamp01(0.33 * ensemble_score + 0.22 * texture + 0.22 * artifacts + 0.18 * perceptual + 0.05 * (1.0 - min(1.0, border_artifact * 2.0)))
+    score = clamp01(0.33 * ensemble_score + 0.22 * texture + 0.22 * artifacts + 0.18 * perceptual + 0.05 * (1.0 - min(1.0, border_artifact * 2.0)))
     if score < 0.45:
         warnings.append("adult_aesthetic_polish_flat")
     return score, warnings, notes
@@ -64,7 +61,7 @@ def _emotional_nuance(metadata: Dict[str, Any]) -> Tuple[float, list[str], list[
     foreshadow = float(hidden.get("foreshadowing_callback_score", 0.5) or 0.5)
     fixation = float(saliency.get("fixation_order_score", 0.5) or 0.5)
     angle = float(shot.get("angle_alignment_score", 0.5) or 0.5)
-    score = _clamp01(0.35 * subtle + 0.25 * foreshadow + 0.2 * fixation + 0.2 * angle)
+    score = clamp01(0.35 * subtle + 0.25 * foreshadow + 0.2 * fixation + 0.2 * angle)
     if score < 0.45:
         warnings.append("adult_emotional_nuance_limited")
     else:
@@ -79,7 +76,7 @@ def _reread_value(metadata: Dict[str, Any]) -> Tuple[float, list[str], list[str]
     parent_reward = float(hidden.get("parent_reward_score", 0.5) or 0.5)
     recurrence = float(hidden.get("recurrence_consistency_score", 0.5) or 0.5)
     hidden_comp = float(hidden.get("composite_score", 0.5) or 0.5)
-    score = _clamp01(0.4 * hidden_comp + 0.35 * parent_reward + 0.25 * recurrence)
+    score = clamp01(0.4 * hidden_comp + 0.35 * parent_reward + 0.25 * recurrence)
     if score < 0.45:
         warnings.append("adult_reread_value_weak")
     else:
@@ -98,8 +95,8 @@ def score_adult_channel(report: Dict[str, Any], metadata: Dict[str, Any]) -> Adu
     nuance, w4, n4 = _emotional_nuance(metadata)
     reread, w5, n5 = _reread_value(metadata)
 
-    composite = _clamp01(0.26 * composition + 0.2 * color + 0.24 * polish + 0.15 * nuance + 0.15 * reread)
-    confidence = _clamp01(0.45 + 0.12 * bool(metadata.get("visual_ensemble")) + 0.12 * bool(metadata.get("color_score")) + 0.14 * bool(metadata.get("hidden_world_score")) + 0.08 * bool(metadata.get("shot_adherence_score")) + 0.09 * bool(report.get("style_hist_similarity")))
+    composite = clamp01(0.26 * composition + 0.2 * color + 0.24 * polish + 0.15 * nuance + 0.15 * reread)
+    confidence = clamp01(0.45 + 0.12 * bool(metadata.get("visual_ensemble")) + 0.12 * bool(metadata.get("color_score")) + 0.14 * bool(metadata.get("hidden_world_score")) + 0.08 * bool(metadata.get("shot_adherence_score")) + 0.09 * bool(report.get("style_hist_similarity")))
 
     return AdultChannelScoreResult(
         composition_maturity_score=round(composition, 4),
