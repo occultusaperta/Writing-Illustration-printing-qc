@@ -10,6 +10,8 @@ from bookforge.saliency_flow import build_saliency_sequence_finding
 from bookforge.typography import build_typography_sequence_finding
 from bookforge.typography.types import TypographySequenceFinding
 from bookforge.saliency_flow.types import SaliencySequenceFinding
+from bookforge.hidden_world import build_hidden_world_sequence_finding
+from bookforge.hidden_world.types import HiddenWorldSequenceFinding
 
 
 def _clamp01(value: float) -> float:
@@ -90,6 +92,7 @@ class BookSequenceReport:
     camera_sequence: CameraSequenceFinding
     saliency_flow_sequence: SaliencySequenceFinding
     typography_sequence: TypographySequenceFinding
+    hidden_world_sequence: HiddenWorldSequenceFinding
     per_page_notes: List[Dict[str, Any]]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -510,6 +513,7 @@ def build_book_sequence_report(
     premium_qc: Dict[str, Any] | None,
     camera_sequence_plan: Dict[int, Dict[str, Any]] | None = None,
     typography_rows: List[Dict[str, Any]] | None = None,
+    hidden_world_plan: Dict[str, Any] | None = None,
 ) -> BookSequenceReport:
     color_script = color_script if isinstance(color_script, dict) else {}
     architecture_plan = architecture_plan if isinstance(architecture_plan, list) else []
@@ -518,6 +522,7 @@ def build_book_sequence_report(
     premium_qc = premium_qc if isinstance(premium_qc, dict) else {}
     camera_sequence_plan = camera_sequence_plan if isinstance(camera_sequence_plan, dict) else {}
     typography_rows = typography_rows if isinstance(typography_rows, list) else []
+    hidden_world_plan = hidden_world_plan if isinstance(hidden_world_plan, dict) else {}
 
     qa_by_page = _series_from_qa_attempts(qa_attempts, page_count)
     color_pages = {
@@ -535,6 +540,7 @@ def build_book_sequence_report(
     camera_sequence = _build_camera_sequence_findings(page_count, camera_sequence_plan, architecture_plan)
     saliency_flow_sequence = build_saliency_sequence_finding(page_count, qa_attempts, camera_sequence_plan)
     typography_sequence = build_typography_sequence_finding(typography_rows)
+    hidden_world_sequence = build_hidden_world_sequence_finding(page_count=page_count, hidden_world_plan=hidden_world_plan, qa_attempts=qa_attempts)
 
     warnings: List[str] = []
     errors: List[str] = []
@@ -553,6 +559,8 @@ def build_book_sequence_report(
         warnings.append("QA attempts absent; saliency-flow sequence diagnostics are limited.")
     if not typography_rows:
         warnings.append("Typography metadata absent; typography diagnostics are limited.")
+    if not hidden_world_plan:
+        warnings.append("Hidden-world planning artifacts absent; rereadability diagnostics are limited.")
 
     summary_notes.extend(color_warnings)
     summary_notes.extend(architecture_flow.repeated_pattern_warnings[:2])
@@ -560,11 +568,12 @@ def build_book_sequence_report(
     summary_notes.extend(camera_sequence.opening_warnings[:1])
     summary_notes.extend(saliency_flow_sequence.camera_mismatch_warnings[:1])
     summary_notes.extend(typography_sequence.sequence_notes[:1])
+    summary_notes.extend(hidden_world_sequence.positive_rereadability_highlights[:1])
     if not summary_notes:
         summary_notes.append("Sequence diagnostics completed with no major warnings.")
 
     overall = round(
-        _clamp01(0.24 * color_score + 0.22 * architecture_flow.summary_score + 0.18 * energy_curve.mismatch_score + 0.12 * camera_sequence.summary_score + 0.12 * saliency_flow_sequence.summary_score + 0.12 * typography_sequence.summary_score),
+        _clamp01(0.22 * color_score + 0.2 * architecture_flow.summary_score + 0.16 * energy_curve.mismatch_score + 0.12 * camera_sequence.summary_score + 0.1 * saliency_flow_sequence.summary_score + 0.1 * typography_sequence.summary_score + 0.1 * hidden_world_sequence.summary_score),
         4,
     )
 
@@ -583,6 +592,7 @@ def build_book_sequence_report(
                 "shot_type": str((camera_sequence_plan.get(p) or {}).get("shot_type", "")),
                 "saliency_flow_score": float(((qa_by_page.get(p, {}).get("metadata", {}) or {}).get("saliency_flow_score", {}) or {}).get("composite_score", 0.0) or 0.0),
                 "typography_composite_score": float(next(((row.get("typography_score", {}) or {}).get("composite_score", 0.0) for row in typography_rows if _safe_page_int(row.get("page")) == p), 0.0) or 0.0),
+                "hidden_world_composite_score": float(((qa_by_page.get(p, {}).get("metadata", {}) or {}).get("hidden_world_score", {}) or {}).get("composite_score", 0.0) or 0.0),
             }
         )
 
@@ -602,6 +612,7 @@ def build_book_sequence_report(
         camera_sequence=camera_sequence,
         saliency_flow_sequence=saliency_flow_sequence,
         typography_sequence=typography_sequence,
+        hidden_world_sequence=hidden_world_sequence,
         per_page_notes=per_page_notes,
     )
 

@@ -16,6 +16,7 @@ from bookforge.qc.gpu_batch_scoring import gpu_batch_scoring_enabled, score_cand
 from bookforge.qc.ensemble_visual import evaluate_visual_ensemble
 from bookforge.camera_language.scoring import score_shot_adherence
 from bookforge.saliency_flow import score_saliency_flow
+from bookforge.hidden_world import score_hidden_world_adherence
 from bookforge.qc.print_qc import analyze_print_qc, print_qc_warnings
 from bookforge.qc.visual_integrity import (
     border_artifact_score,
@@ -148,6 +149,8 @@ def choose_best_variant(
     age_range: str | None = None,
     shot_plan_entry: Dict[str, Any] | None = None,
     prompt_metadata: Dict[str, Any] | None = None,
+    hidden_world_guidance: Dict[str, Any] | None = None,
+    illustration_notes: str = "",
 ) -> Tuple[Path, Dict[str, Any]]:
     saliency_flow_enabled = str(os.getenv("BOOKFORGE_SALIENCY_FLOW", "true")).strip().lower() in {"1", "true", "yes", "on"}
     batch_scores: Dict[str, Dict[str, float]] = {}
@@ -212,6 +215,16 @@ def choose_best_variant(
                 prompt_metadata=prompt_metadata,
             )
             metadata["saliency_flow_score"] = saliency_score.to_dict()
+
+        hidden_world_score = score_hidden_world_adherence(
+            page_number=page_number or 0,
+            hidden_world_guidance=hidden_world_guidance,
+            prompt_metadata=prompt_metadata,
+            saliency_score=(metadata.get("saliency_flow_score") if isinstance(metadata.get("saliency_flow_score"), dict) else {}),
+            architecture_variant=architecture_variant,
+            illustration_notes=illustration_notes,
+        )
+        metadata["hidden_world_score"] = hidden_world_score.to_dict()
 
     scored = sorted(
         reports,
