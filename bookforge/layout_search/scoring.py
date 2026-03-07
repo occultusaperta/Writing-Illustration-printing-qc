@@ -8,10 +8,7 @@ from PIL import Image
 
 from bookforge.layout_search.types import LayoutPermutation, LayoutPermutationScore
 from bookforge.saliency_flow import score_saliency_flow
-
-
-def _clamp01(value: float) -> float:
-    return float(max(0.0, min(1.0, value)))
+from bookforge.utils import clamp01
 
 
 def _normalized_to_pixels(zone: Dict[str, float], width: int, height: int) -> tuple[int, int, int, int]:
@@ -54,11 +51,11 @@ def score_layout_permutation(
 
     lum, busy = _region_stats(image_path, permutation.text_zone)
     contrast_pref = 1.0 - abs((lum / 255.0) - 0.5) * 1.2
-    text_readability = _clamp01(0.65 * contrast_pref + 0.35 * (1.0 - min(1.0, busy / 60.0)))
+    text_readability = clamp01(0.65 * contrast_pref + 0.35 * (1.0 - min(1.0, busy / 60.0)))
 
     zone_area = max(0.001, permutation.text_zone["w"] * permutation.text_zone["h"])
     char_demand = max(1.0, len(page_text.strip()) / 240.0)
-    text_fit = _clamp01(1.0 - max(0.0, char_demand - (zone_area * 10.0)) * 0.35)
+    text_fit = clamp01(1.0 - max(0.0, char_demand - (zone_area * 10.0)) * 0.35)
 
     pseudo_variant = {
         "architecture_type": permutation.architecture_type,
@@ -68,21 +65,21 @@ def score_layout_permutation(
         ],
     }
     saliency = score_saliency_flow(image_path, page_number=page_number, architecture_variant=pseudo_variant)
-    saliency_quietness = _clamp01(saliency.text_quietness_score)
-    focal_balance = _clamp01(0.55 * saliency.primary_focus_score + 0.45 * (1.0 - saliency.spread_bridge_score if is_spread else saliency.primary_focus_score))
-    page_turn_flow = _clamp01(saliency.page_turn_flow_score)
+    saliency_quietness = clamp01(saliency.text_quietness_score)
+    focal_balance = clamp01(0.55 * saliency.primary_focus_score + 0.45 * (1.0 - saliency.spread_bridge_score if is_spread else saliency.primary_focus_score))
+    page_turn_flow = clamp01(saliency.page_turn_flow_score)
 
     gutter_mid = 0.5
     text_mid = permutation.text_zone["x"] + 0.5 * permutation.text_zone["w"]
     dist = abs(text_mid - gutter_mid)
-    gutter_safety = _clamp01(0.2 + min(0.8, dist * 2.2)) if gutter_sensitive or is_spread else 1.0
+    gutter_safety = clamp01(0.2 + min(0.8, dist * 2.2)) if gutter_sensitive or is_spread else 1.0
 
     whitespace = max(0.0, 1.0 - (permutation.art_zone["w"] * permutation.art_zone["h"] + zone_area))
-    whitespace_balance = _clamp01(1.0 - abs(whitespace - 0.16) * 3.2)
+    whitespace_balance = clamp01(1.0 - abs(whitespace - 0.16) * 3.2)
 
     base_text = base_layout.get("text_zone", permutation.text_zone)
     alignment_delta = abs(base_text.get("x", 0.0) - permutation.text_zone["x"]) + abs(base_text.get("y", 0.0) - permutation.text_zone["y"])
-    architecture_alignment = _clamp01(1.0 - alignment_delta * 1.8)
+    architecture_alignment = clamp01(1.0 - alignment_delta * 1.8)
 
     rejected = False
     if text_fit < 0.42:
@@ -95,7 +92,7 @@ def score_layout_permutation(
         warnings.append("text_zone_too_small")
         rejected = True
 
-    composite = _clamp01(
+    composite = clamp01(
         0.18 * text_readability
         + 0.18 * text_fit
         + 0.15 * saliency_quietness
@@ -105,7 +102,7 @@ def score_layout_permutation(
         + 0.08 * architecture_alignment
         + 0.07 * page_turn_flow
     )
-    confidence = _clamp01(0.45 + 0.35 * (1.0 - min(1.0, len(warnings) * 0.3)) + 0.2 * saliency.confidence)
+    confidence = clamp01(0.45 + 0.35 * (1.0 - min(1.0, len(warnings) * 0.3)) + 0.2 * saliency.confidence)
 
     if rejected:
         notes.append("Hard rejection triggered by bounded layout constraints.")

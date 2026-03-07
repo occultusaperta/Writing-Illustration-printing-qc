@@ -4,10 +4,7 @@ from statistics import mean
 from typing import Any, Dict, List
 
 from bookforge.typography.types import PageTypographyPlan, TypographyScoreResult, TypographySequenceFinding
-
-
-def _clamp01(value: float) -> float:
-    return float(max(0.0, min(1.0, value)))
+from bookforge.utils import clamp01
 
 
 def score_typography_plan(
@@ -20,24 +17,24 @@ def score_typography_plan(
     arch = page_architecture_context if isinstance(page_architecture_context, dict) else {}
 
     contrast_hint = float((saliency_context.get("text_zone_quietness_score", {}) or {}).get("quietness_score", 0.6) or 0.6)
-    contrast_readability_score = _clamp01(0.55 + 0.45 * contrast_hint)
+    contrast_readability_score = clamp01(0.55 + 0.45 * contrast_hint)
 
     text_zone = plan.text_zone
     zone_area = text_zone["w"] * text_zone["h"]
-    text_zone_quietness_score = _clamp01(0.9 - max(0.0, 0.2 - zone_area))
+    text_zone_quietness_score = clamp01(0.9 - max(0.0, 0.2 - zone_area))
 
     line_count = max(1, len([ln for ln in plan.lines if ln.line_text.strip()]))
-    fit_score = _clamp01(1.0 - max(0.0, (line_count - 7) * 0.08))
+    fit_score = clamp01(1.0 - max(0.0, (line_count - 7) * 0.08))
 
     expressive_roles = [ln.role for ln in plan.lines if ln.role != "body"]
-    expressive_alignment_score = _clamp01(0.95 - abs(len(expressive_roles) - 2) * 0.1)
+    expressive_alignment_score = clamp01(0.95 - abs(len(expressive_roles) - 2) * 0.1)
 
     rhythm_penalty = sum(0.12 for ln in plan.lines if ln.line_gap_multiplier > 1.3)
-    readaloud_rhythm_score = _clamp01(0.92 - rhythm_penalty)
+    readaloud_rhythm_score = clamp01(0.92 - rhythm_penalty)
 
-    print_safety_score = _clamp01(0.95 if zone_area >= 0.08 else 0.72)
+    print_safety_score = clamp01(0.95 if zone_area >= 0.08 else 0.72)
     if bool(arch.get("gutter_sensitive", False)) and text_zone["x"] < 0.1:
-        print_safety_score = _clamp01(print_safety_score - 0.1)
+        print_safety_score = clamp01(print_safety_score - 0.1)
 
     warnings: List[str] = []
     notes: List[str] = []
@@ -50,7 +47,7 @@ def score_typography_plan(
     if plan.special_positioning_mode != "anchored":
         notes.append("Special positioning mode active.")
 
-    composite = _clamp01(
+    composite = clamp01(
         0.2 * contrast_readability_score
         + 0.18 * text_zone_quietness_score
         + 0.2 * fit_score
@@ -91,7 +88,7 @@ def build_typography_sequence_finding(page_rows: List[Dict[str, Any]]) -> Typogr
         notes.append("Typography diagnostics completed with bounded rule-based checks.")
 
     return TypographySequenceFinding(
-        summary_score=round(_clamp01(mean(scores) if scores else 0.0), 4),
+        summary_score=round(clamp01(mean(scores) if scores else 0.0), 4),
         high_quality_pages=high_quality,
         crowding_risk_pages=crowding,
         weak_contrast_pages=weak_contrast,

@@ -84,7 +84,7 @@ def test_studio_uses_locked_reference_paths(monkeypatch, tmp_path: Path):
         Image.new("RGB", (128, 128), (111, 111, 111)).save(img)
         return {"provider": "fal", "endpoint": "fake", "variants": {1: [str(img)]}, "cache_hits": {1: [False]}, "cache_keys": {1: ["k"]}}
 
-    def fake_choose(paths, qa, style_ref, prev_ref):
+    def fake_choose(paths, qa, style_ref, prev_ref, **kwargs):
         return paths[0], {"passes": True, "best": {"color_drift_vs_style": 0.1, "focus_bleed_overlap": 0.0}}
 
     monkeypatch.setattr("bookforge.illustration.fal_flux.FalFluxIllustrator.generate_page_variants", fake_generate)

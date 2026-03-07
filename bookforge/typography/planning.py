@@ -4,10 +4,7 @@ from typing import Any, Dict, List
 
 from bookforge.typography.storyweaver import extract_storyweaver_typography_directives
 from bookforge.typography.types import PageTypographyPlan, TypographyDirective, TypographyLinePlan, TypographySpan
-
-
-def _clamp01(value: float) -> float:
-    return float(max(0.0, min(1.0, value)))
+from bookforge.utils import clamp01
 
 
 def _text_zone_from_architecture(page_architecture_context: Dict[str, Any] | None) -> Dict[str, float]:
@@ -81,7 +78,7 @@ def plan_page_typography(
                 TypographySpan(
                     text=directive.text,
                     role=role,
-                    emphasis=_clamp01(directive.strength),
+                    emphasis=clamp01(directive.strength),
                     scale_class="lg" if role == "emphasis" else scale_class,
                     weight_class=weight_class,
                     directional_drift=drift,

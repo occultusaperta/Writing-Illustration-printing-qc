@@ -3,10 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Tuple
 
 from bookforge.camera_language.types import ShotScoreResult
-
-
-def _clamp01(v: float) -> float:
-    return float(max(0.0, min(1.0, v)))
+from bookforge.utils import clamp01
 
 
 def _focus_area_ratio(focus_box: Any) -> float:
@@ -35,8 +32,8 @@ def _distance_target_score(distance_class: str, focus_ratio: float) -> float:
     if lo <= focus_ratio <= hi:
         return 1.0
     if focus_ratio < lo:
-        return _clamp01(1.0 - (lo - focus_ratio) * 3.5)
-    return _clamp01(1.0 - (focus_ratio - hi) * 3.5)
+        return clamp01(1.0 - (lo - focus_ratio) * 3.5)
+    return clamp01(1.0 - (focus_ratio - hi) * 3.5)
 
 
 def _angle_score(angle_class: str, focus_box: Any) -> float:
@@ -50,14 +47,14 @@ def _angle_score(angle_class: str, focus_box: Any) -> float:
     if cy > 1.0:
         cy = cy / 1024.0
     if angle_class == "high_angle":
-        return _clamp01(1.0 - abs(cy - 0.35) * 2.5)
+        return clamp01(1.0 - abs(cy - 0.35) * 2.5)
     if angle_class == "low_angle":
-        return _clamp01(1.0 - abs(cy - 0.65) * 2.5)
+        return clamp01(1.0 - abs(cy - 0.65) * 2.5)
     if angle_class == "tilted":
         return 0.6
     if angle_class == "over_shoulder":
         return 0.65
-    return _clamp01(1.0 - abs(cy - 0.5) * 1.6)
+    return clamp01(1.0 - abs(cy - 0.5) * 1.6)
 
 
 def score_shot_adherence(variant_report: Dict[str, Any], shot_plan_entry: Dict[str, Any] | None) -> ShotScoreResult | None:
@@ -70,7 +67,7 @@ def score_shot_adherence(variant_report: Dict[str, Any], shot_plan_entry: Dict[s
     shot_type = str(shot_plan_entry.get("shot_type", "medium_interaction"))
 
     framing_score = _distance_target_score(distance_class, focus_ratio)
-    focus_alignment = _clamp01(1.0 - float(variant_report.get("focus_bleed_overlap", 0.0) or 0.0) * 2.0)
+    focus_alignment = clamp01(1.0 - float(variant_report.get("focus_bleed_overlap", 0.0) or 0.0) * 2.0)
     angle_alignment = _angle_score(angle_class, focus_box)
 
     family_match = 0.55 + 0.25 * framing_score + 0.2 * angle_alignment
@@ -88,7 +85,7 @@ def score_shot_adherence(variant_report: Dict[str, Any], shot_plan_entry: Dict[s
     if not warnings:
         notes.append("shot heuristics are broadly aligned with plan")
 
-    composite = _clamp01(0.35 * framing_score + 0.3 * focus_alignment + 0.2 * angle_alignment + 0.15 * family_match)
+    composite = clamp01(0.35 * framing_score + 0.3 * focus_alignment + 0.2 * angle_alignment + 0.15 * family_match)
     confidence = 0.55 if angle_class in {"over_shoulder", "tilted"} else 0.7
 
     return ShotScoreResult(

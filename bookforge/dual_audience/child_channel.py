@@ -3,10 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Tuple
 
 from bookforge.dual_audience.types import ChildChannelScoreResult
-
-
-def _clamp01(v: float) -> float:
-    return float(max(0.0, min(1.0, v)))
+from bookforge.utils import clamp01
 
 
 def _focal_clarity(report: Dict[str, Any], metadata: Dict[str, Any]) -> Tuple[float, list[str], list[str]]:
@@ -16,7 +13,7 @@ def _focal_clarity(report: Dict[str, Any], metadata: Dict[str, Any]) -> Tuple[fl
     saliency_score = float(saliency.get("primary_focus_score", saliency.get("composite_score", 0.5)) or 0.5)
     fixation = float(saliency.get("fixation_order_score", 0.5) or 0.5)
     focus_overlap = float(report.get("focus_bleed_overlap", 0.0) or 0.0)
-    score = _clamp01(0.55 * saliency_score + 0.25 * fixation + 0.2 * (1.0 - min(1.0, focus_overlap * 2.0)))
+    score = clamp01(0.55 * saliency_score + 0.25 * fixation + 0.2 * (1.0 - min(1.0, focus_overlap * 2.0)))
     if score < 0.45:
         warnings.append("child_focal_clarity_weak")
     else:
@@ -31,7 +28,7 @@ def _face_action_prominence(report: Dict[str, Any], metadata: Dict[str, Any]) ->
     saliency = (metadata.get("saliency_flow_score") or {}) if isinstance(metadata.get("saliency_flow_score"), dict) else {}
     first_fix = float(saliency.get("primary_focus_score", 0.5) or 0.5)
     face_component = 0.85 if 1 <= faces <= 2 else (0.55 if faces == 0 else 0.45)
-    score = _clamp01(0.65 * face_component + 0.35 * first_fix)
+    score = clamp01(0.65 * face_component + 0.35 * first_fix)
     if faces > 3:
         warnings.append("child_face_action_signal_noisy")
     if faces == 0:
@@ -48,7 +45,7 @@ def _emotional_readability(report: Dict[str, Any], metadata: Dict[str, Any]) -> 
     saliency = (metadata.get("saliency_flow_score") or {}) if isinstance(metadata.get("saliency_flow_score"), dict) else {}
     focus = float(saliency.get("primary_focus_score", saliency.get("composite_score", 0.5)) or 0.5)
     boost = 0.08 if shot_type in {"closeup_emotion", "medium_interaction"} else 0.0
-    score = _clamp01(0.52 * focus + 0.38 * framing + 0.1 + boost)
+    score = clamp01(0.52 * focus + 0.38 * framing + 0.1 + boost)
     if score < 0.5:
         warnings.append("child_emotion_readability_muddy")
     else:
@@ -63,8 +60,8 @@ def _narrative_simplicity(report: Dict[str, Any], metadata: Dict[str, Any]) -> T
     composition = float(ensemble.get("composition_score", 0.5) or 0.5)
     clarity = float(ensemble.get("clarity_score", 0.5) or 0.5)
     entropy = float(report.get("entropy", 6.0) or 6.0)
-    clutter_penalty = _clamp01((entropy - 6.2) / 2.6)
-    score = _clamp01(0.38 * composition + 0.32 * clarity + 0.3 * (1.0 - clutter_penalty))
+    clutter_penalty = clamp01((entropy - 6.2) / 2.6)
+    score = clamp01(0.38 * composition + 0.32 * clarity + 0.3 * (1.0 - clutter_penalty))
     if clutter_penalty > 0.6:
         warnings.append("child_narrative_clutter_risk")
     return score, warnings, notes
@@ -77,7 +74,7 @@ def _text_coexistence(report: Dict[str, Any], metadata: Dict[str, Any]) -> Tuple
     text_q = float(saliency.get("text_quietness_score", 0.5) or 0.5)
     text_like = float(report.get("text_likelihood", 0.0) or 0.0)
     focus_overlap = float(report.get("focus_bleed_overlap", 0.0) or 0.0)
-    score = _clamp01(0.5 * text_q + 0.3 * (1.0 - min(1.0, text_like * 2.0)) + 0.2 * (1.0 - min(1.0, focus_overlap * 2.0)))
+    score = clamp01(0.5 * text_q + 0.3 * (1.0 - min(1.0, text_like * 2.0)) + 0.2 * (1.0 - min(1.0, focus_overlap * 2.0)))
     if score < 0.5:
         warnings.append("child_text_readaloud_coexistence_risk")
     else:
@@ -96,8 +93,8 @@ def score_child_channel(report: Dict[str, Any], metadata: Dict[str, Any]) -> Chi
     simplicity, w4, n4 = _narrative_simplicity(report, metadata)
     text_safe, w5, n5 = _text_coexistence(report, metadata)
 
-    composite = _clamp01(0.27 * focal + 0.2 * face + 0.2 * emotion + 0.18 * simplicity + 0.15 * text_safe)
-    confidence = _clamp01(0.45 + 0.1 * bool(metadata.get("saliency_flow_score")) + 0.1 * bool(metadata.get("shot_adherence_score")) + 0.1 * bool(metadata.get("visual_ensemble")) + 0.1 * bool(report.get("focus_box")) + 0.15 * bool(report.get("entropy")))
+    composite = clamp01(0.27 * focal + 0.2 * face + 0.2 * emotion + 0.18 * simplicity + 0.15 * text_safe)
+    confidence = clamp01(0.45 + 0.1 * bool(metadata.get("saliency_flow_score")) + 0.1 * bool(metadata.get("shot_adherence_score")) + 0.1 * bool(metadata.get("visual_ensemble")) + 0.1 * bool(report.get("focus_box")) + 0.15 * bool(report.get("entropy")))
 
     return ChildChannelScoreResult(
         focal_clarity_score=round(focal, 4),

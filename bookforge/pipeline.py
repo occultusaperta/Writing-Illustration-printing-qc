@@ -1869,7 +1869,7 @@ class BookforgePipeline:
             warnings.append("Missing review/character_commercial_report.json")
 
         dual_audience_enabled = bool((json.loads((review_dir / "production_report.json").read_text(encoding="utf-8")) if (review_dir / "production_report.json").exists() else {}).get("dual_audience", {}).get("enabled", True))
-        page_turn_tension_enabled = bool((json.loads((review_dir / "production_report.json").read_text(encoding="utf-8")) if (review_dir / "production_report.json").exists() else {}).get("page_turn_tension", {}).get("enabled", False))
+        page_turn_tension_enabled = bool((json.loads((review_dir / "production_report.json").read_text(encoding="utf-8")) if (review_dir / "production_report.json").exists() else {}).get("page_turn_tension", {}).get("enabled", True))
         dual_audience_report_path = review_dir / "dual_audience_report.json"
         if dual_audience_report_path.exists():
             payload = json.loads(dual_audience_report_path.read_text(encoding="utf-8"))
