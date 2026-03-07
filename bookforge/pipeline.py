@@ -181,6 +181,15 @@ def _order_variants(variant_paths: List[Path], preferred_variant: int | None) ->
     others = [p for p in variant_paths if p not in preferred]
     return preferred + others
 
+def _studio_debug_enabled() -> bool:
+    import os
+
+    return str(os.getenv("BOOKFORGE_DEBUG_STUDIO", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _studio_debug(msg: str) -> None:
+    if _studio_debug_enabled():
+        print(f"[studio-debug] {msg}", flush=True)
 
 def _fal_key_from_env() -> str:
     import os
@@ -290,6 +299,7 @@ class BookforgePipeline:
         option_images = sorted((preprod).rglob("*_v*.png"))
         generate_contact_sheet(option_images, preprod / "options_contact_sheet.pdf")
 
+        _studio_debug("spread handling complete; rendering PDFs")
         engine = PDFLayoutEngine(font_path=Path("assets/fonts/NotoSans-Regular.ttf"))
         for p in INTERIOR_LAYOUT_PRESETS:
             engine.render_interior_preview(preprod / "layout_previews" / f"interior_preview_{p.id}.pdf", size, self.bleed_in, self.safe_in, p)
@@ -667,6 +677,7 @@ class BookforgePipeline:
         req_w, req_h = lock["print"]["required_pixels"]
 
         prompts = []
+        _studio_debug("studio start: building prompts")
         turn_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("page_turn_map", []) if isinstance(x, dict)}
         artifact_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("resolved_artifacts_map", []) if isinstance(x, dict)}
         for p in parsed["pages"]:
@@ -714,6 +725,7 @@ class BookforgePipeline:
         (out / "prompts.json").write_text(json.dumps({"prompts": prompts, "prompt_contract": prompt_contract, "checkpoint": checkpoint_summary}, indent=2), encoding="utf-8")
 
         page_seeds = {int(k): int(v) for k, v in lock.get("seeds", {}).get("per_page_seed", {}).items()}
+        _studio_debug(f"starting full-page generation for {len(prompts)} pages")
         generated = ill.generate_page_variants(
             prompts,
             out / "images" / "variants_raw",
@@ -734,6 +746,7 @@ class BookforgePipeline:
         force_regen_set = {int(p) for p in checkpoint_summary.get("force_regen", [])}
         variant_pref = {int(k): int(v) for k, v in checkpoint_summary.get("variant_preference", {}).items()}
 
+        _studio_debug("starting per-page QA selection/regeneration loop")
         for page in parsed["pages"]:
             no = page["page_number"]
             raw_variant_paths = _order_variants([Path(p) for p in generated["variants"][no]], variant_pref.get(no))
@@ -783,6 +796,7 @@ class BookforgePipeline:
             selected.append(str(dst))
             prev_ref = dst
 
+        _studio_debug("completed per-page selection; entering spread handling")
         spread_pairs = _parse_spread_pairs(lock.get("spreads", {}), page_count)
 
         upscale_setting = str(lock.get("post", {}).get("upscale_after_approval", "disabled")).strip().lower()
@@ -791,6 +805,7 @@ class BookforgePipeline:
             for src in selected:
                 upscaled_selected.append(str(upscale_image(Path(src))))
             selected = upscaled_selected
+        _studio_debug(f"spread pairs to process: {len(spread_pairs)}")
         for a, b in spread_pairs:
             spread_prompt = prompts[a - 1]["prompt"] + " panoramic double-page spread"
             spread_ok = False
@@ -828,6 +843,7 @@ class BookforgePipeline:
         cover_config["back_blurb"] = lock.get("back_matter", {}).get("blurb", "") if lock.get("back_matter", {}).get("enabled", True) else ""
         engine.render_cover_wrap(cover, guides, trim_w, trim_h, self.bleed_in, self.safe_in, len(parsed["pages"]), lock["cover"]["spine_w_in"], parsed["title"], parsed["author"], Path(lock["approved_cover"]), Path(lock["approved_style"]), get_preset(lock["cover_layout_preset"], "cover"), cover_config)
 
+        _studio_debug("PDFs rendered; running preflight and review packaging")
         preflight = KDPPreflight().run(interior, cover, selected, trim_w, trim_h, self.bleed_in, len(parsed["pages"]), lock["cover"]["spine_w_in"], upscaled_pages, lock["cover"], self.safe_in, float(lock.get("pdf", {}).get("max_interior_mb", 300)))
         (out / "preflight_report.json").write_text(json.dumps(preflight, indent=2), encoding="utf-8")
 
@@ -847,9 +863,10 @@ class BookforgePipeline:
         )[:5]
         cache_bools = [hit for arr in cache_hits.values() for hit in arr]
         cache_hit_rate = (sum(1 for x in cache_bools if x) / len(cache_bools)) if cache_bools else 0.0
-        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}}
+        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}}
         write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
+        _studio_debug("running premium visual QC")
         premium_qc = run_premium_visual_qc(
             [Path(p) for p in selected],
             lock=lock,
@@ -907,6 +924,7 @@ class BookforgePipeline:
             shutil.copytree(preprod_companion, review_companion)
         generate_html_report(out, [Path(p) for p in selected], qa_payload, production_payload, Path(lock["approved_cover"]))
 
+        _studio_debug("writing final package zip")
         zip_path = out / "bookforge_package.zip"
         self._create_package(zip_path, out)
         return {"status": preflight["status"], "out_dir": str(out), "zip": str(zip_path)}
