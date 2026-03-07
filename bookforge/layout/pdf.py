@@ -162,7 +162,33 @@ class PDFLayoutEngine:
                 for t_idx, tok in enumerate(tokens, start=1):
                     self._draw_stroked_centred_text(c, safe_x + step * t_idx, y, tok, black, white, stroke_offset=0.8)
 
-    def render_interior(self, pages: List[Dict[str, Any]], image_paths: List[str], output_interior: Path, size: str, bleed_in: float, safe_margin_in: float, layout_preset: Dict[str, Any], typography_preset: Dict[str, Any], pdf_options: Dict[str, Any] | None = None, spread_pairs: List[Tuple[int, int]] | None = None) -> Dict[str, Any]:
+    def _normalized_to_page_rect(self, rect: Dict[str, float], page_w: float, page_h: float) -> Tuple[float, float, float, float]:
+        x = max(0.0, min(page_w, float(rect.get("x", 0.0)) * page_w))
+        y = max(0.0, min(page_h, float(rect.get("y", 0.0)) * page_h))
+        w = max(1.0, min(page_w - x, float(rect.get("w", 1.0)) * page_w))
+        h = max(1.0, min(page_h - y, float(rect.get("h", 1.0)) * page_h))
+        return x, y, w, h
+
+    def _draw_image_zone(self, c: canvas.Canvas, image_path: Path, zone: Dict[str, float], page_w: float, page_h: float, preserve_aspect: bool = True, stroke: bool = False) -> None:
+        x, y, w, h = self._normalized_to_page_rect(zone, page_w, page_h)
+        c.drawImage(ImageReader(str(image_path)), x, y, w, h, preserveAspectRatio=preserve_aspect, anchor="c")
+        if stroke:
+            c.setStrokeColorRGB(1, 1, 1)
+            c.setLineWidth(1.2)
+            c.roundRect(x, y, w, h, 6, stroke=1, fill=0)
+
+    def _safe_rect(self, safe_x: float, safe_y: float, safe_w: float, safe_h: float) -> Dict[str, float]:
+        return {"x": safe_x, "y": safe_y, "w": safe_w, "h": safe_h}
+
+    def _zone_to_safe_bounds(self, zone: Dict[str, float], safe_x: float, safe_y: float, safe_w: float, safe_h: float, page_w: float, page_h: float) -> Tuple[float, float, float, float]:
+        x, y, w, h = self._normalized_to_page_rect(zone, page_w, page_h)
+        x0 = max(safe_x, x)
+        y0 = max(safe_y, y)
+        x1 = min(safe_x + safe_w, x + w)
+        y1 = min(safe_y + safe_h, y + h)
+        return x0, y0, max(1.0, x1 - x0), max(1.0, y1 - y0)
+
+    def render_interior(self, pages: List[Dict[str, Any]], image_paths: List[str], output_interior: Path, size: str, bleed_in: float, safe_margin_in: float, layout_preset: Dict[str, Any], typography_preset: Dict[str, Any], pdf_options: Dict[str, Any] | None = None, spread_pairs: List[Tuple[int, int]] | None = None, architecture_layout: Dict[int, Dict[str, Any]] | None = None) -> Dict[str, Any]:
         trim_w, trim_h = parse_trim_size(size)
         page_w = (trim_w + bleed_in * 2) * 72
         page_h = (trim_h + bleed_in * 2) * 72
@@ -176,7 +202,10 @@ class PDFLayoutEngine:
         embed_mode = str(options.get("image_embed", "jpeg")).lower()
         jpeg_quality = int(options.get("jpeg_quality", 92))
         spread_page_set = {p for pair in (spread_pairs or []) for p in pair}
+        applied_layout: List[Dict[str, Any]] = []
         for page, img_path in zip(pages, image_paths):
+            page_no = int(page.get("page_number", 0))
+            arch = (architecture_layout or {}).get(page_no, {})
             embed_path = Path(img_path)
             temp_path: Path | None = None
             if embed_mode == "jpeg":
@@ -185,37 +214,99 @@ class PDFLayoutEngine:
                     temp_path = output_interior.parent / f".tmp_embed_{page['page_number']:03d}.jpg"
                     rgb.save(temp_path, format="JPEG", quality=jpeg_quality, subsampling=0)
                 embed_path = temp_path
-            c.drawImage(ImageReader(str(embed_path)), 0, 0, page_w, page_h, preserveAspectRatio=False, anchor="c")
+            mode = str((arch.get("compositor_hints", {}) or {}).get("mode", "legacy_default"))
+            if mode in {"full_bleed_spread", "wordless_spread", "full_bleed_single_art_page", "legacy_default"}:
+                c.drawImage(ImageReader(str(embed_path)), 0, 0, page_w, page_h, preserveAspectRatio=False, anchor="c")
+            elif mode in {"vignette", "spot_illustration", "text_dominant", "full_bleed_single_text_page"}:
+                c.setFillColorRGB(1, 1, 1)
+                c.rect(0, 0, page_w, page_h, stroke=0, fill=1)
+                self._draw_image_zone(c, embed_path, arch.get("art_zone", {"x": 0.08, "y": 0.4, "w": 0.84, "h": 0.5}), page_w, page_h, preserve_aspect=True)
+            elif mode == "panel_sequence":
+                c.setFillColorRGB(1, 1, 1)
+                c.rect(0, 0, page_w, page_h, stroke=0, fill=1)
+                for panel in arch.get("panel_zones", [])[:3]:
+                    self._draw_image_zone(c, embed_path, panel, page_w, page_h, preserve_aspect=True)
+            elif mode == "inset_composite":
+                self._draw_image_zone(c, embed_path, arch.get("art_zone", {"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0}), page_w, page_h, preserve_aspect=False)
+                for inset in arch.get("inset_zones", []):
+                    self._draw_image_zone(c, embed_path, inset, page_w, page_h, preserve_aspect=True, stroke=True)
+            else:
+                c.drawImage(ImageReader(str(embed_path)), 0, 0, page_w, page_h, preserveAspectRatio=False, anchor="c")
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
             panel_h = safe_h * layout_preset["panel_height_ratio"]
             panel_y = safe_y if layout_preset["panel_position"] == "bottom" else safe_y + safe_h - panel_h
+            panel_x = safe_x
+            panel_w = safe_w
+            layout_fallback = ""
+            if isinstance(arch, dict) and arch.get("text_zone"):
+                zx, zy, zw, zh = self._zone_to_safe_bounds(arch["text_zone"], safe_x, safe_y, safe_w, safe_h, page_w, page_h)
+                panel_x, panel_y, panel_w, panel_h = zx, zy, zw, zh
+                if str(arch.get("page_side", "")) == "verso" and bool(arch.get("gutter_sensitive", False)):
+                    gutter_clearance = page_w * 0.06
+                    if panel_x < gutter_clearance:
+                        shift = gutter_clearance - panel_x
+                        panel_x = min(page_w - panel_w, panel_x + shift)
+                    if panel_x + panel_w > page_w - gutter_clearance:
+                        panel_w = max(1.0, (page_w - gutter_clearance) - panel_x)
+                if panel_w < 40 or panel_h < 30:
+                    panel_h = safe_h * layout_preset["panel_height_ratio"]
+                    panel_y = safe_y if layout_preset["panel_position"] == "bottom" else safe_y + safe_h - panel_h
+                    panel_x = safe_x
+                    panel_w = safe_w
+                    layout_fallback = "pas_text_zone_too_small_for_typography"
             c.setFillColorRGB(1, 1, 1)
-            c.roundRect(safe_x, panel_y, safe_w, panel_h, 8, stroke=0, fill=1)
+            if not bool(arch.get("suppress_body_text", False)):
+                c.roundRect(panel_x, panel_y, panel_w, panel_h, 8, stroke=0, fill=1)
 
             raw_text = self._soften_widow(self._hyphenate_text(page["text"].strip()))
             font_size = typography_preset["base_font_size"]
             para_h = panel_h - 2 * layout_preset["panel_padding_pt"]
-            para_w = safe_w - 2 * layout_preset["panel_padding_pt"]
+            para_w = panel_w - 2 * layout_preset["panel_padding_pt"]
             para = None
-            while font_size >= typography_preset["min_font_size"]:
-                style = ParagraphStyle(
-                    name="body",
-                    fontName=self.font_name,
-                    fontSize=font_size,
-                    leading=font_size * typography_preset["leading"],
-                    alignment=1 if layout_preset["text_align"] == "center" else 0,
-                    textColor=black,
-                )
-                para = Paragraph(raw_text, style)
-                _, needed_h = para.wrap(para_w, para_h)
-                if needed_h <= para_h:
-                    break
-                font_size -= 1
-            if para is None or font_size < typography_preset["min_font_size"]:
-                raise RuntimeError(f"Text overflow could not be resolved on page {page['page_number']}. Reduce text or choose a larger panel preset.")
+            if not bool(arch.get("suppress_body_text", False)):
+                while font_size >= typography_preset["min_font_size"]:
+                    style = ParagraphStyle(
+                        name="body",
+                        fontName=self.font_name,
+                        fontSize=font_size,
+                        leading=font_size * typography_preset["leading"],
+                        alignment=1 if layout_preset["text_align"] == "center" else 0,
+                        textColor=black,
+                    )
+                    para = Paragraph(raw_text, style)
+                    _, needed_h = para.wrap(para_w, para_h)
+                    if needed_h <= para_h:
+                        break
+                    font_size -= 1
+                if para is None or font_size < typography_preset["min_font_size"]:
+                    if arch:
+                        panel_h = safe_h * layout_preset["panel_height_ratio"]
+                        panel_y = safe_y if layout_preset["panel_position"] == "bottom" else safe_y + safe_h - panel_h
+                        panel_x = safe_x
+                        panel_w = safe_w
+                        para_h = panel_h - 2 * layout_preset["panel_padding_pt"]
+                        para_w = panel_w - 2 * layout_preset["panel_padding_pt"]
+                        font_size = typography_preset["base_font_size"]
+                        while font_size >= typography_preset["min_font_size"]:
+                            style = ParagraphStyle(
+                                name="body_fallback",
+                                fontName=self.font_name,
+                                fontSize=font_size,
+                                leading=font_size * typography_preset["leading"],
+                                alignment=1 if layout_preset["text_align"] == "center" else 0,
+                                textColor=black,
+                            )
+                            para = Paragraph(raw_text, style)
+                            _, needed_h = para.wrap(para_w, para_h)
+                            if needed_h <= para_h:
+                                layout_fallback = layout_fallback or "pas_text_zone_overflow_fallback_to_preset"
+                                break
+                            font_size -= 1
+                    if para is None or font_size < typography_preset["min_font_size"]:
+                        raise RuntimeError(f"Text overflow could not be resolved on page {page['page_number']}. Reduce text or choose a larger panel preset.")
 
-            para.drawOn(c, safe_x + layout_preset["panel_padding_pt"], panel_y + panel_h - layout_preset["panel_padding_pt"] - needed_h)
+                para.drawOn(c, panel_x + layout_preset["panel_padding_pt"], panel_y + panel_h - layout_preset["panel_padding_pt"] - needed_h)
             directives = page.get("typography_directives", []) if isinstance(page, dict) else []
             if isinstance(directives, list) and directives:
                 self._draw_typography_overlays(c, directives, page_w, page_h, safe_x, safe_y, safe_w, safe_h)
@@ -223,9 +314,20 @@ class PDFLayoutEngine:
                 c.setFillColor(black)
                 c.setFont(self.font_name, 9)
                 c.drawRightString(page_w - safe_x, safe_y - 14, str(page["page_number"]))
+            applied_layout.append(
+                {
+                    "page": page_no,
+                    "architecture_type": arch.get("architecture_type", "none") if isinstance(arch, dict) else "none",
+                    "variant_id": arch.get("variant_id", "") if isinstance(arch, dict) else "",
+                    "layout_mode": mode,
+                    "suppress_body_text": bool(arch.get("suppress_body_text", False)) if isinstance(arch, dict) else False,
+                    "gutter_safe_applied": bool(arch.get("gutter_safe_applied", False)) if isinstance(arch, dict) else False,
+                    "layout_fallback_reason": layout_fallback or (arch.get("layout_fallback_reason", "") if isinstance(arch, dict) else ""),
+                }
+            )
             c.showPage()
         c.save()
-        return {"page_dimensions_pt": [page_w, page_h], "spread_page_set": sorted(spread_page_set)}
+        return {"page_dimensions_pt": [page_w, page_h], "spread_page_set": sorted(spread_page_set), "applied_page_architecture": applied_layout}
 
     def render_cover_wrap(self, output_cover: Path, output_guides: Path, trim_w: float, trim_h: float, bleed_in: float, safe_margin_in: float, page_count: int, spine_w: float, title: str, author: str, approved_cover: Path, approved_style: Path, cover_preset: Dict[str, Any], cover_config: Dict[str, Any]) -> Dict[str, Any]:
         cover_w = 2 * trim_w + spine_w + 2 * bleed_in
