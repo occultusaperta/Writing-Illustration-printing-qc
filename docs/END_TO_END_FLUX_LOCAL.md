@@ -1,10 +1,21 @@
 # End-to-End: BookForge with Rented Flux Local Runtime
 
+Set runtime env first:
+
+```bash
+export BOOKFORGE_RUNTIME_PROVIDER=runpod
+export RUNPOD_API_KEY=...
+export BOOKFORGE_FLUX_RUNTIME_MODE=diffusers
+export BOOKFORGE_GPU_BATCH_SCORING=true
+```
+
 1) Provision a machine:
 
 ```bash
-bookforge runtime-provision --max-hourly-usd 1.2 --min-gpu-ram-gb 16
+bookforge runtime-provision --max-hourly-usd 5.0 --min-gpu-ram-gb 120
 ```
+
+RunPod mode automatically targets `NVIDIA B200` for pod creation.
 
 2) Bootstrap machine software:
 
@@ -35,6 +46,18 @@ export BOOKFORGE_FLUX_LOCAL_URL=http://<runtime-host>:8188/generate
 
 ```bash
 bookforge studio --story examples/sample_story.md --out out --illustrator flux_local --require-lock
+```
+
+7) Stop runtime after work:
+
+```bash
+bookforge runtime-stop
+```
+
+8) Destroy runtime to avoid charges:
+
+```bash
+bookforge runtime-destroy
 ```
 
 ## Honest limitations

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from bookforge.runtime.orchestration import RuntimeOrchestrator
 from bookforge.runtime.orchestration import RuntimeConfig, config_from_env
 from bookforge.runtime.providers.vast_ai import VastAIRuntimeProvider
 from bookforge.runtime.ssh import build_ssh_command
@@ -43,3 +44,39 @@ def test_build_ssh_command():
     assert "-p 2202" in rendered
     assert "root@1.2.3.4" in rendered
     assert "echo hi" in rendered
+
+
+def test_runpod_orchestration_picks_b200_and_persists_state(monkeypatch, tmp_path: Path):
+    class FakeRunpodProvider:
+        name = "runpod"
+
+        def list_offers(self, *, max_hourly_usd: float, min_gpu_ram_gb: int):
+            from bookforge.runtime.providers.base import RuntimeOffer
+
+            return [
+                RuntimeOffer("runpod", "id-a100", "NVIDIA A100", 1, 1.0, "global", {}),
+                RuntimeOffer("runpod", "id-b200", "NVIDIA B200", 1, 2.0, "global", {}),
+            ]
+
+        def create_instance(self, *, offer_id: str, disk_gb: int, image=None):
+            from bookforge.runtime.providers.base import RuntimeInstance
+
+            assert offer_id == "id-b200"
+            return RuntimeInstance("runpod", "pod-123", "203.0.113.10", 30222, "root", "RUNNING", {})
+
+        def stop_instance(self, *, instance_id: str):
+            return {"id": instance_id}
+
+        def destroy_instance(self, *, instance_id: str):
+            return {"id": instance_id}
+
+        def instance_status(self, *, instance_id: str):
+            return {"id": instance_id, "desiredStatus": "RUNNING"}
+
+    monkeypatch.setenv("RUNPOD_API_KEY", "test-key")
+    cfg = RuntimeConfig(provider="runpod", state_path=str(tmp_path / "runtime.json"))
+    orch = RuntimeOrchestrator(cfg)
+    orch.provider = FakeRunpodProvider()
+    payload = orch.provision()
+    assert payload["offer"]["gpu_name"] == "NVIDIA B200"
+    assert Path(cfg.state_path).exists()

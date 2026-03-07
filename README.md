@@ -20,6 +20,24 @@ pip install -e ".[ui]"
 bookforge ui
 ```
 
+## RunPod B200 runtime quickstart
+
+```bash
+export BOOKFORGE_RUNTIME_PROVIDER=runpod
+export RUNPOD_API_KEY=...
+bookforge runtime-provision
+bookforge runtime-bootstrap
+bookforge runtime-launch
+bookforge runtime-health --url http://<runtime-host>:8188/health
+```
+
+Then point image generation to flux local:
+
+```bash
+export BOOKFORGE_IMAGE_PROVIDER=flux_local
+export BOOKFORGE_FLUX_LOCAL_URL=http://<runtime-host>:8188/generate
+```
+
 UI highlights:
 - Black “Liquid Glass” local control plane.
 - Full gate flow: doctor → preprod → approval gate → lock → studio → checkpoint gate → verify.

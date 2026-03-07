@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 from bookforge.runtime.health import wait_for_health
 from bookforge.runtime.providers.base import RuntimeInstance, RuntimeProvider
+from bookforge.runtime.providers.runpod import RunPodRuntimeProvider
 from bookforge.runtime.providers.vast_ai import VastAIRuntimeProvider
 from bookforge.runtime.ssh import copy_file_to_remote, run_ssh_command
 
@@ -40,6 +41,8 @@ def config_from_env() -> RuntimeConfig:
 def _resolve_provider(cfg: RuntimeConfig) -> RuntimeProvider:
     if cfg.provider == "vast_ai":
         return VastAIRuntimeProvider()
+    if cfg.provider == "runpod":
+        return RunPodRuntimeProvider()
     raise RuntimeError(f"Unsupported runtime provider: {cfg.provider}")
 
 
@@ -52,7 +55,13 @@ class RuntimeOrchestrator:
         offers = self.provider.list_offers(max_hourly_usd=self.cfg.max_hourly_usd, min_gpu_ram_gb=self.cfg.min_gpu_ram_gb)
         if not offers:
             raise RuntimeError("No rentable GPU offers matched budget and VRAM filters.")
-        selected = offers[0]
+        if self.cfg.provider == "runpod":
+            b200 = [o for o in offers if o.gpu_name.strip().lower() == "nvidia b200"]
+            if not b200:
+                raise RuntimeError("RunPod did not return a NVIDIA B200 GPU type.")
+            selected = b200[0]
+        else:
+            selected = offers[0]
         instance = self.provider.create_instance(offer_id=selected.offer_id, disk_gb=self.cfg.disk_gb)
         payload = {"status": "ok", "offer": asdict(selected), "instance": asdict(instance), "config": asdict(self.cfg)}
         self._write_state(payload)
