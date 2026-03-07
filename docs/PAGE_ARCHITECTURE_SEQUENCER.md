@@ -24,7 +24,14 @@ This packet adds PAS planning modules and artifact output only.
 ## Feature flag
 - `BOOKFORGE_PAGE_ARCHITECTURE=true|false` (default true)
 
+## Packet 2 integration (prompt coupling)
+- PAS planning artifacts now feed studio prompt assembly when present.
+- Prompt contract objects now include `metadata.page_architecture_guidance` per page.
+- Prompt text now receives architecture-aware composition hints (architecture type, camera/framing intent, spread/single mode, zone guidance, gutter safety).
+- Planning-derived negatives can append text-zone/gutter/intent conflict avoidance hints.
+- If planning artifacts are missing, studio falls back safely to previous behavior.
+
 ## Deferred to later packets
 - Deep layout rewrite/rendering from PAS output.
 - Advanced variant scoring and rescoring loops.
-- Tight coupling to prompt generation/composition scoring.
+- Layout engine enforcement from PAS zones.

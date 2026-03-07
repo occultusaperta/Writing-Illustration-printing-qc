@@ -17,8 +17,14 @@ This packet adds the **planning spine** for CSE only.
 ## Feature flag
 - `BOOKFORGE_COLOR_SCRIPT=true|false` (default true)
 
+## Packet 2 integration (prompt coupling)
+- CSE planning artifacts now flow into studio prompt assembly when present.
+- Prompt contract objects now include `metadata.color_script_guidance` per page.
+- Prompt text now receives explicit color direction (palette, mood descriptors, lighting/chroma/lightness targets, accent usage).
+- Planning-derived negatives can append forbidden-palette avoidance guidance.
+- If planning artifacts are missing, studio falls back safely to previous behavior.
+
 ## Deferred to later packets
-- Prompt coupling to CSE.
 - Color scoring/reselection loops.
 - Postprocess tuning driven by color script.
 - Transition repair/re-planning during generation.

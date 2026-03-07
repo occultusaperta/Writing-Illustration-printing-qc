@@ -31,7 +31,11 @@ from bookforge.editorial.report import render_editorial_report_md
 from bookforge.editorial.rhythm_audit import audit_rhythm_and_rhyme
 from bookforge.editorial.trade_dress import generate_trade_dress
 from bookforge.color_script import plan_color_script, write_planning_artifacts as write_color_planning_artifacts
+from bookforge.color_script.prompting import build_color_negative_lines, build_color_prompt_lines, build_color_script_guidance
 from bookforge.page_architecture import plan_architecture_sequence, write_planning_artifacts as write_arch_planning_artifacts
+from bookforge.page_architecture.prompting import build_architecture_negative_lines, build_architecture_prompt_lines, build_page_architecture_guidance
+from bookforge.page_architecture.templates import architecture_templates
+from bookforge.page_architecture.types import to_primitive as arch_to_primitive
 from bookforge.profiles import apply_profile, load_profile
 from bookforge.qc.image_qc import choose_best_variant, write_qa_report
 from bookforge.qc.kdp_preflight import KDPPreflight
@@ -60,6 +64,46 @@ def _storyweaver_spreads(parsed: Dict[str, Any]) -> List[List[int]]:
             if isinstance(pair, (list, tuple)) and len(pair) == 2:
                 out.append([int(pair[0]), int(pair[1])])
     return out
+
+
+def _load_json_if_exists(path: Path) -> Any:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _build_planning_prompt_guidance(out: Path) -> Dict[int, Dict[str, Any]]:
+    planning_dir = out / "preprod" / "planning"
+    color_payload = _load_json_if_exists(planning_dir / "color_script.json") or {}
+    emotion_payload = _load_json_if_exists(planning_dir / "emotion_analysis.json") or []
+    arch_plan = _load_json_if_exists(planning_dir / "architecture_plan.json") or []
+
+    emotion_by_page = {int(x.get("page_number", 0)): x for x in emotion_payload if isinstance(x, dict)}
+    color_by_page = {int(x.get("page_number", 0)): x for x in color_payload.get("pages", []) if isinstance(x, dict)}
+    arch_by_page = {int(x.get("page_number", 0)): x for x in arch_plan if isinstance(x, dict)}
+
+    variants = {v.variant_id: v for v in architecture_templates()}
+
+    page_numbers = sorted(set(color_by_page.keys()) | set(arch_by_page.keys()) | set(emotion_by_page.keys()))
+    guidance: Dict[int, Dict[str, Any]] = {}
+    for page_no in page_numbers:
+        color_g = build_color_script_guidance(color_by_page.get(page_no), emotion_by_page.get(page_no))
+        plan = arch_by_page.get(page_no)
+        variant = None
+        if plan:
+            selected_variant = str(plan.get("selected_variant_id", ""))
+            if selected_variant in variants:
+                variant = {"zones": [arch_to_primitive(z) for z in variants[selected_variant].zones]}
+        arch_g = build_page_architecture_guidance(plan, variant)
+        prompt_lines = build_color_prompt_lines(color_g) + build_architecture_prompt_lines(arch_g)
+        negative_lines = build_color_negative_lines(color_g) + build_architecture_negative_lines(arch_g)
+        guidance[page_no] = {
+            "color_script_guidance": color_g,
+            "page_architecture_guidance": arch_g,
+            "prompt_lines": prompt_lines,
+            "negative_lines": negative_lines,
+        }
+    return guidance
 
 
 def _build_prompt_addendum(page: Dict[str, Any], turn: Dict[str, Any], artifact: Dict[str, Any], editorial_mode: bool) -> str:
@@ -698,6 +742,7 @@ class BookforgePipeline:
         req_w, req_h = lock["print"]["required_pixels"]
 
         prompts = []
+        planning_prompt_guidance = _build_planning_prompt_guidance(out)
         _studio_debug("studio start: building prompts")
         turn_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("page_turn_map", []) if isinstance(x, dict)}
         artifact_map = {int(x.get("page_number", 0)): x for x in lock.get("editorial", {}).get("resolved_artifacts_map", []) if isinstance(x, dict)}
@@ -705,19 +750,23 @@ class BookforgePipeline:
             sb = storyboard_pages.get(p["page_number"], {})
             turn = turn_map.get(p["page_number"], {})
             artifact = artifact_map.get(p["page_number"], {})
+            page_plan = planning_prompt_guidance.get(int(p["page_number"]), {})
+            planning_lines = page_plan.get("prompt_lines", [])
             addendum = _build_prompt_addendum(p, turn, artifact, bool(lock.get("editorial", {}).get("editorial_mode", True)))
+            addendum = " ".join([addendum] + [str(x) for x in planning_lines if str(x).strip()]).strip()
             prompt = compile_prompt(lock, p["text"], sb, addendum=addendum)
+            prompt_negative_lines = page_plan.get("negative_lines", [])
             prompts.append(
                 {
                     "page_number": p["page_number"],
-                    "prompt": prompt,
+                    "prompt": prompt + (" " + " ".join(prompt_negative_lines) if prompt_negative_lines else ""),
                     "illustration_notes": p.get("illustration_notes", ""),
                     "required_hidden_details": p.get("required_hidden_details", []),
                     "reference_images": [lock.get("approved_character_reference", lock.get("approved_character", "")), lock.get("approved_style_reference", lock.get("approved_style", ""))],
                 }
             )
 
-        prompt_contract = build_prompt_contract(parsed, lock, spread_pairs=lock.get("spreads", {}).get("pairs", []))
+        prompt_contract = build_prompt_contract(parsed, lock, spread_pairs=lock.get("spreads", {}).get("pairs", []), planning_guidance=planning_prompt_guidance)
 
         checkpoint_pages = int(lock.get("checkpoint", {}).get("pages", 0))
         check_file = out / "CHECKPOINT.json"
