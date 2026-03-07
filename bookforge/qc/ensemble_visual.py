@@ -6,6 +6,7 @@ from typing import Any, Sequence
 
 import numpy as np
 from PIL import Image, ImageFilter
+
 from bookforge.utils import clamp01
 
 try:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
+
 from bookforge.utils import clamp01
 
 
