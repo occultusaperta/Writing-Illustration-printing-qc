@@ -72,10 +72,15 @@ class PDFLayoutEngine:
     def __init__(self, font_path: Path) -> None:
         self.font_name = "NotoSans"
         self.font_path = font_path
+        self.font_fallback_reason = ""
         try:
             pdfmetrics.registerFont(TTFont(self.font_name, str(self.font_path)))
-        except Exception as exc:
-            raise RuntimeError("Font embed failed. Ensure assets/fonts/NotoSans-Regular.ttf exists and is a valid TTF.") from exc
+        except Exception:
+            self.font_name = "Helvetica"
+            self.font_fallback_reason = (
+                "Font embed failed for assets/fonts/NotoSans-Regular.ttf; "
+                "falling back to Helvetica."
+            )
 
     def _soften_widow(self, text: str) -> str:
         parts = text.split()

@@ -7,9 +7,14 @@ import numpy as np
 from PIL import Image
 
 
-def _load_rgb(image_path: str | Path) -> np.ndarray:
+def _load_rgb(image_path: str | Path, max_dim: int = 320) -> np.ndarray:
     with Image.open(image_path) as im:
-        return np.asarray(im.convert("RGB"), dtype=np.float32)
+        rgb = im.convert("RGB")
+        longest = max(rgb.width, rgb.height, 1)
+        if longest > max_dim:
+            scale = max_dim / float(longest)
+            rgb = rgb.resize((max(1, int(rgb.width * scale)), max(1, int(rgb.height * scale))), Image.Resampling.BILINEAR)
+        return np.asarray(rgb, dtype=np.float32)
 
 
 def _to_gray(arr: np.ndarray) -> np.ndarray:
