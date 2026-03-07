@@ -58,6 +58,7 @@ from bookforge.review.html_report import generate_report as generate_html_report
 from bookforge.review.proof_pack import generate_proof_pack, write_production_report
 from bookforge.review.book_sequence import build_book_sequence_report, write_book_sequence_report
 from bookforge.dual_audience import build_dual_audience_report, write_dual_audience_report
+from bookforge.page_turn import build_page_turn_tension_report, write_page_turn_tension_report
 from bookforge.review.reselection import (
     apply_reselection_decisions,
     run_bounded_reselection,
@@ -219,6 +220,10 @@ def _dual_audience_enabled() -> bool:
 
 def _monte_carlo_layout_enabled() -> bool:
     return _feature_flag("BOOKFORGE_MONTE_CARLO_LAYOUT", default="true")
+
+
+def _page_turn_tension_enabled() -> bool:
+    return _feature_flag("BOOKFORGE_PAGE_TURN_TENSION", default="true")
 
 
 def _build_typography_plans(
@@ -1059,6 +1064,7 @@ class BookforgePipeline:
                 prompt_metadata=prompt_metadata_by_page.get(no),
                 hidden_world_guidance=hidden_world_by_page.get(no),
                 illustration_notes=str(next((pg.get("illustration_notes", "") for pg in parsed.get("pages", []) if int(pg.get("page_number", 0) or 0) == no), "")),
+                page_count=len(parsed.get("pages", [])),
             )
             qa_attempts.append({"page": no, "attempt": 1, **qa})
             rounds = 0
@@ -1151,6 +1157,7 @@ class BookforgePipeline:
                     prompt_metadata=prompt_metadata_by_page.get(a),
                     hidden_world_guidance=hidden_world_by_page.get(a),
                     illustration_notes=str(next((pg.get("illustration_notes", "") for pg in parsed.get("pages", []) if int(pg.get("page_number", 0) or 0) == a), "")),
+                    page_count=len(parsed.get("pages", [])),
                 )
                 qa_attempts.append({"page": f"{a}-{b}", "attempt": spread_round, "spread": True, **spread_qa})
                 if not spread_qa["passes"]:
@@ -1171,6 +1178,7 @@ class BookforgePipeline:
                     prompt_metadata=prompt_metadata_by_page.get(a),
                     hidden_world_guidance=hidden_world_by_page.get(a),
                     illustration_notes=str(next((pg.get("illustration_notes", "") for pg in parsed.get("pages", []) if int(pg.get("page_number", 0) or 0) == a), "")),
+                    page_count=len(parsed.get("pages", [])),
                 )
                 right_best, right_qa = choose_best_variant(
                     [Path(selected[b - 1])],
@@ -1187,6 +1195,7 @@ class BookforgePipeline:
                     prompt_metadata=prompt_metadata_by_page.get(b),
                     hidden_world_guidance=hidden_world_by_page.get(b),
                     illustration_notes=str(next((pg.get("illustration_notes", "") for pg in parsed.get("pages", []) if int(pg.get("page_number", 0) or 0) == b), "")),
+                    page_count=len(parsed.get("pages", [])),
                 )
                 qa_attempts.append({"page": a, "attempt": spread_round, "spread_half": "left", **left_qa})
                 qa_attempts.append({"page": b, "attempt": spread_round, "spread_half": "right", **right_qa})
@@ -1304,7 +1313,7 @@ class BookforgePipeline:
         )[:5]
         cache_bools = [hit for arr in cache_hits.values() for hit in arr]
         cache_hit_rate = (sum(1 for x in cache_bools if x) / len(cache_bools)) if cache_bools else 0.0
-        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "hidden_world": {"enabled": _hidden_world_enabled(), "planned_pages": len(hidden_world_by_page)}, "storefront": {"enabled": _storefront_optimization_enabled()}, "character_commercial_scoring": {"enabled": _character_commercial_scoring_enabled()}, "dual_audience": {"enabled": _dual_audience_enabled()}, "layout_search": {"enabled": _monte_carlo_layout_enabled(), "entries": len(layout_search_results)}, "applied_page_architecture": applied_arch_review}
+        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "hidden_world": {"enabled": _hidden_world_enabled(), "planned_pages": len(hidden_world_by_page)}, "storefront": {"enabled": _storefront_optimization_enabled()}, "character_commercial_scoring": {"enabled": _character_commercial_scoring_enabled()}, "dual_audience": {"enabled": _dual_audience_enabled()}, "page_turn_tension": {"enabled": _page_turn_tension_enabled()}, "layout_search": {"enabled": _monte_carlo_layout_enabled(), "entries": len(layout_search_results)}, "applied_page_architecture": applied_arch_review}
         write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
         _studio_debug("running premium visual QC")
@@ -1371,8 +1380,15 @@ class BookforgePipeline:
             ).to_dict(),
             layout_search_report=layout_search_report,
             dual_audience_enabled=_dual_audience_enabled(),
+            page_turn_tension_enabled=_page_turn_tension_enabled(),
         )
         write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
+        page_turn_report = build_page_turn_tension_report(
+            page_count=len(parsed.get("pages", [])),
+            qa_attempts=qa_attempts,
+            enabled=_page_turn_tension_enabled(),
+        )
+        write_page_turn_tension_report(review / "page_turn_tension_report.json", page_turn_report)
         dual_audience_report = build_dual_audience_report(
             page_count=len(parsed.get("pages", [])),
             qa_attempts=qa_attempts,
@@ -1459,9 +1475,12 @@ class BookforgePipeline:
                     ).to_dict(),
                     layout_search_report=layout_search_report,
                     dual_audience_enabled=_dual_audience_enabled(),
+                    page_turn_tension_enabled=_page_turn_tension_enabled(),
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
+                page_turn_report = build_page_turn_tension_report(page_count=len(parsed.get("pages", [])), qa_attempts=qa_attempts, enabled=_page_turn_tension_enabled())
+                write_page_turn_tension_report(review / "page_turn_tension_report.json", page_turn_report)
                 (review / "typography_report.json").write_text(json.dumps(sequence_report.to_dict().get("typography_sequence", {}), indent=2), encoding="utf-8")
                 storefront_report = build_storefront_optimization_report(
                     selected=selected,
@@ -1579,6 +1598,7 @@ class BookforgePipeline:
                     prompt_metadata=prompt_metadata_by_page.get(page_no),
                     hidden_world_guidance=hidden_world_by_page.get(page_no),
                     illustration_notes=str(next((pg.get("illustration_notes", "") for pg in parsed.get("pages", []) if int(pg.get("page_number", 0) or 0) == page_no), "")),
+                    page_count=len(parsed.get("pages", [])),
                 )
                 generated_candidates[page_no] = regen_qa.get("best", {})
 
@@ -1626,9 +1646,12 @@ class BookforgePipeline:
                     ).to_dict(),
                     layout_search_report=layout_search_report,
                     dual_audience_enabled=_dual_audience_enabled(),
+                    page_turn_tension_enabled=_page_turn_tension_enabled(),
                 )
                 sequence_report = sequence_after
                 write_book_sequence_report(review / "book_sequence_report.json", sequence_report)
+                page_turn_report = build_page_turn_tension_report(page_count=len(parsed.get("pages", [])), qa_attempts=qa_attempts, enabled=_page_turn_tension_enabled())
+                write_page_turn_tension_report(review / "page_turn_tension_report.json", page_turn_report)
                 character_commercial_report = build_character_commercial_report(
                     page_count=len(parsed.get("pages", [])),
                     qa_attempts=qa_attempts,
@@ -1737,6 +1760,7 @@ class BookforgePipeline:
             "review/storefront_optimization_report.json",
             "review/character_commercial_report.json",
             "review/dual_audience_report.json",
+            "review/page_turn_tension_report.json",
             "review/report.html",
         ]
 
@@ -1845,6 +1869,7 @@ class BookforgePipeline:
             warnings.append("Missing review/character_commercial_report.json")
 
         dual_audience_enabled = bool((json.loads((review_dir / "production_report.json").read_text(encoding="utf-8")) if (review_dir / "production_report.json").exists() else {}).get("dual_audience", {}).get("enabled", True))
+        page_turn_tension_enabled = bool((json.loads((review_dir / "production_report.json").read_text(encoding="utf-8")) if (review_dir / "production_report.json").exists() else {}).get("page_turn_tension", {}).get("enabled", False))
         dual_audience_report_path = review_dir / "dual_audience_report.json"
         if dual_audience_report_path.exists():
             payload = json.loads(dual_audience_report_path.read_text(encoding="utf-8"))
@@ -1855,6 +1880,21 @@ class BookforgePipeline:
             failures.append("Missing review/dual_audience_report.json while dual-audience feature is enabled")
         else:
             warnings.append("Missing review/dual_audience_report.json (disabled by feature flag)")
+
+        page_turn_tension_report_path = review_dir / "page_turn_tension_report.json"
+        if page_turn_tension_report_path.exists():
+            payload = json.loads(page_turn_tension_report_path.read_text(encoding="utf-8"))
+            required_fields = ["enabled", "summary_score", "weak_turn_runs", "leftward_resistance_runs", "over_resolved_turns", "strong_turn_pages", "warnings", "positive_notes", "limitations", "findings"]
+            missing_fields = [field for field in required_fields if field not in payload]
+            if missing_fields and page_turn_tension_enabled:
+                for field in missing_fields:
+                    failures.append(f"page_turn_tension_report.json missing {field}")
+            elif missing_fields:
+                warnings.append("page_turn_tension_report.json present but partial while feature is disabled")
+        elif page_turn_tension_enabled:
+            failures.append("Missing review/page_turn_tension_report.json while page-turn tension feature is enabled")
+        else:
+            warnings.append("Missing review/page_turn_tension_report.json (disabled by feature flag)")
 
         hidden_world_report_path = review_dir / "hidden_world_report.json"
         if hidden_world_report_path.exists():

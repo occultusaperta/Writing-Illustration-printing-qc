@@ -19,6 +19,7 @@ from bookforge.saliency_flow import score_saliency_flow
 from bookforge.hidden_world import score_hidden_world_adherence
 from bookforge.dual_audience import score_dual_audience
 from bookforge.character_scoring import score_character_commercial
+from bookforge.page_turn import score_page_turn_tension
 from bookforge.qc.print_qc import analyze_print_qc, print_qc_warnings
 from bookforge.qc.visual_integrity import (
     border_artifact_score,
@@ -153,10 +154,12 @@ def choose_best_variant(
     prompt_metadata: Dict[str, Any] | None = None,
     hidden_world_guidance: Dict[str, Any] | None = None,
     illustration_notes: str = "",
+    page_count: int | None = None,
 ) -> Tuple[Path, Dict[str, Any]]:
     character_commercial_enabled = str(os.getenv("BOOKFORGE_CHARACTER_COMMERCIAL_SCORING", "true")).strip().lower() in {"1", "true", "yes", "on"}
     saliency_flow_enabled = str(os.getenv("BOOKFORGE_SALIENCY_FLOW", "true")).strip().lower() in {"1", "true", "yes", "on"}
     dual_audience_enabled = str(os.getenv("BOOKFORGE_DUAL_AUDIENCE", "true")).strip().lower() in {"1", "true", "yes", "on"}
+    page_turn_tension_enabled = str(os.getenv("BOOKFORGE_PAGE_TURN_TENSION", "true")).strip().lower() in {"1", "true", "yes", "on"}
     batch_scores: Dict[str, Dict[str, float]] = {}
     if gpu_batch_scoring_enabled():
         batch_scores = score_candidate_batch(paths)
@@ -245,6 +248,19 @@ def choose_best_variant(
                 }
         if dual_audience_enabled:
             metadata["dual_audience_score"] = score_dual_audience(report).to_dict()
+        if page_turn_tension_enabled and page_number is not None:
+            turn_score = score_page_turn_tension(
+                report["path"],
+                page_number=int(page_number),
+                page_count=int(page_count or max(1, page_number)),
+                page_text=page_text,
+                prompt_metadata=(prompt_metadata if isinstance(prompt_metadata, dict) else {}),
+                architecture_variant=(architecture_variant if isinstance(architecture_variant, dict) else {}),
+                shot_plan_entry=(shot_plan_entry if isinstance(shot_plan_entry, dict) else {}),
+                saliency_score=(metadata.get("saliency_flow_score") if isinstance(metadata.get("saliency_flow_score"), dict) else {}),
+                illustration_notes=illustration_notes,
+            )
+            metadata["page_turn_tension_score"] = turn_score.to_dict()
 
     scored = sorted(
         reports,
@@ -259,6 +275,7 @@ def choose_best_variant(
             0.05 * (((r.get("metadata") or {}).get("saliency_flow_score") or {}).get("composite_score", 0.0)),
             0.04 * (((r.get("metadata") or {}).get("character_commercial_score") or {}).get("composite_score", 0.0)),
             0.035 * (((r.get("metadata") or {}).get("dual_audience_score") or {}).get("composite_score", 0.0)),
+            0.02 * (((r.get("metadata") or {}).get("page_turn_tension_score") or {}).get("page_turn_tension_score", 0.0)),
         ),
         reverse=True,
     )
