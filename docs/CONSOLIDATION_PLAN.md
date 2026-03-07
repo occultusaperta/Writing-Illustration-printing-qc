@@ -124,3 +124,4 @@ The review says "scoring is all post-hoc." This is partially wrong: color script
 ### One thing I am unsure about
 
 Whether `reselection._score_local` (4 dimensions, simple) was *intentionally* kept simpler than `local_score_bundle` (10 dimensions) as a "fast approximation" for runner-up comparison, or whether it simply never got updated as new scoring dimensions were added. The code gives no indication either way. If intentional, merging them would change reselection behavior. If accidental drift, the 4-dimension version is strictly inferior. The threshold alignment (Task 2) is safe regardless; the scorer unification needs validation.
+

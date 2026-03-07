@@ -249,3 +249,4 @@ def test_verify_reads_production_report_once(tmp_path: Path):
         result = BookforgePipeline().verify(str(out))
 
     assert read_count[0] == 1, f"production_report.json was read {read_count[0]} times, expected 1"
+
