@@ -93,6 +93,7 @@ class BookSequenceReport:
     saliency_flow_sequence: SaliencySequenceFinding
     typography_sequence: TypographySequenceFinding
     hidden_world_sequence: HiddenWorldSequenceFinding
+    character_commercial_summary: Dict[str, Any]
     per_page_notes: List[Dict[str, Any]]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -514,6 +515,7 @@ def build_book_sequence_report(
     camera_sequence_plan: Dict[int, Dict[str, Any]] | None = None,
     typography_rows: List[Dict[str, Any]] | None = None,
     hidden_world_plan: Dict[str, Any] | None = None,
+    character_commercial_report: Dict[str, Any] | None = None,
 ) -> BookSequenceReport:
     color_script = color_script if isinstance(color_script, dict) else {}
     architecture_plan = architecture_plan if isinstance(architecture_plan, list) else []
@@ -523,6 +525,7 @@ def build_book_sequence_report(
     camera_sequence_plan = camera_sequence_plan if isinstance(camera_sequence_plan, dict) else {}
     typography_rows = typography_rows if isinstance(typography_rows, list) else []
     hidden_world_plan = hidden_world_plan if isinstance(hidden_world_plan, dict) else {}
+    character_commercial_report = character_commercial_report if isinstance(character_commercial_report, dict) else {}
 
     qa_by_page = _series_from_qa_attempts(qa_attempts, page_count)
     color_pages = {
@@ -561,6 +564,8 @@ def build_book_sequence_report(
         warnings.append("Typography metadata absent; typography diagnostics are limited.")
     if not hidden_world_plan:
         warnings.append("Hidden-world planning artifacts absent; rereadability diagnostics are limited.")
+    if not character_commercial_report:
+        warnings.append("Character commercial report absent; protagonist brandability diagnostics are limited.")
 
     summary_notes.extend(color_warnings)
     summary_notes.extend(architecture_flow.repeated_pattern_warnings[:2])
@@ -569,6 +574,7 @@ def build_book_sequence_report(
     summary_notes.extend(saliency_flow_sequence.camera_mismatch_warnings[:1])
     summary_notes.extend(typography_sequence.sequence_notes[:1])
     summary_notes.extend(hidden_world_sequence.positive_rereadability_highlights[:1])
+    summary_notes.extend([str(n) for n in character_commercial_report.get("warnings", [])[:1]])
     if not summary_notes:
         summary_notes.append("Sequence diagnostics completed with no major warnings.")
 
@@ -613,6 +619,13 @@ def build_book_sequence_report(
         saliency_flow_sequence=saliency_flow_sequence,
         typography_sequence=typography_sequence,
         hidden_world_sequence=hidden_world_sequence,
+        character_commercial_summary={
+            "enabled": bool(character_commercial_report.get("enabled", False)),
+            "summary_score": float(character_commercial_report.get("summary_score", 0.0) or 0.0),
+            "lead_character_strength_summary": str(character_commercial_report.get("lead_character_strength_summary", "")),
+            "warnings": list(character_commercial_report.get("warnings", []) or []),
+            "positive_notes": list(character_commercial_report.get("positive_notes", []) or []),
+        },
         per_page_notes=per_page_notes,
     )
 
