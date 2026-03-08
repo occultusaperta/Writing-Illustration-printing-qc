@@ -111,6 +111,7 @@ def move_component_deltas(
     climax_window: int,
     ending_window: int,
     page_count: int,
+    neighbor_local_bundles: List[Dict[str, float]] | None = None,
 ) -> Dict[str, float]:
     before = local_score_bundle(current)
     after = local_score_bundle(alternative)
@@ -119,12 +120,22 @@ def move_component_deltas(
     climax = climax_start <= page < max(1, page_count - ending_window + 1)
     ending = page > max(0, page_count - ending_window)
 
-    color_delta = transition_fit(page, alternative, sequence_report) - transition_fit(page, current, sequence_report)
-    architecture_delta = after["architecture"] - before["architecture"]
-    camera_delta = after["camera"] - before["camera"]
-    saliency_delta = after["saliency"] - before["saliency"]
-    typography_delta = after["typography"] - before["typography"]
-    hidden_delta = after["hidden_world"] - before["hidden_world"]
+    neighbors = [n for n in (neighbor_local_bundles or []) if isinstance(n, dict)]
+
+    def _continuity_delta(key: str) -> float:
+        if not neighbors:
+            return 0.0
+        before_fit = sum(1.0 - abs(float(before.get(key, 0.5)) - float(n.get(key, 0.5))) for n in neighbors) / len(neighbors)
+        after_fit = sum(1.0 - abs(float(after.get(key, 0.5)) - float(n.get(key, 0.5))) for n in neighbors) / len(neighbors)
+        return clamp01(after_fit) - clamp01(before_fit)
+
+    transition_delta = transition_fit(page, alternative, sequence_report) - transition_fit(page, current, sequence_report)
+    color_delta = 0.55 * _continuity_delta("color") + 0.45 * transition_delta
+    architecture_delta = (after["architecture"] - before["architecture"]) + 0.35 * _continuity_delta("architecture")
+    camera_delta = (after["camera"] - before["camera"]) + 0.35 * _continuity_delta("camera")
+    saliency_delta = (after["saliency"] - before["saliency"]) + 0.35 * _continuity_delta("saliency")
+    typography_delta = (after["typography"] - before["typography"]) + 0.25 * _continuity_delta("typography")
+    hidden_delta = (after["hidden_world"] - before["hidden_world"]) + 0.25 * _continuity_delta("hidden_world")
     character_delta = after["character"] - before["character"]
     layout_delta = 0.5 * ((after["architecture"] + after["saliency"]) - (before["architecture"] + before["saliency"]))
     dual_delta = after["dual_audience"] - before["dual_audience"]
@@ -158,3 +169,20 @@ def move_component_deltas(
 def composite_delta(deltas: Dict[str, float]) -> float:
     weights = scoring_registry().local_candidate.sequence_optimizer_delta_weights
     return round(sum(float(deltas.get(k, 0.0) or 0.0) * w for k, w in weights.items()), 6)
+
+
+def objective_delta(
+    *,
+    deltas: Dict[str, float],
+    before_summary: Dict[str, float],
+    weak_cluster_page: bool,
+) -> float:
+    weights = dict(scoring_registry().local_candidate.sequence_optimizer_delta_weights)
+    total = 0.0
+    for key, weight in weights.items():
+        baseline = float(before_summary.get(key, 0.75) or 0.75)
+        deficit_boost = 1.0 + (max(0.0, 0.75 - baseline) * 0.8)
+        if weak_cluster_page and key in {"weak_cluster_reduction_score", "saliency_flow_score", "camera_flow_score"}:
+            deficit_boost += 0.2
+        total += float(deltas.get(key, 0.0) or 0.0) * weight * deficit_boost
+    return round(total, 6)
