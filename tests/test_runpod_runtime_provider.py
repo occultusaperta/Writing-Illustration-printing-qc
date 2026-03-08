@@ -13,6 +13,15 @@ def test_runtime_config_from_env_runpod(monkeypatch):
     assert cfg.provider == "runpod"
 
 
+
+
+def test_runtime_config_from_env_runpod_default_budget(monkeypatch):
+    monkeypatch.setenv("BOOKFORGE_RUNTIME_PROVIDER", "runpod")
+    monkeypatch.delenv("BOOKFORGE_RUNTIME_MAX_HOURLY_USD", raising=False)
+    cfg = config_from_env()
+    assert cfg.max_hourly_usd == 0.0
+
+
 def test_provider_resolution_runpod(monkeypatch):
     monkeypatch.setenv("RUNPOD_API_KEY", "test-key")
     cfg = RuntimeConfig(provider="runpod")

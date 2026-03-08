@@ -18,6 +18,8 @@ def test_flux_local_service_generate_and_health(tmp_path: Path, monkeypatch):
     t.start()
     health = wait_for_health(f"http://127.0.0.1:{port}/health", timeout_s=20, interval_s=0.2)
     assert health["status"] == "ok"
+    assert health["runtime"]["runtime_mode"] == "fallback"
+    assert health["runtime"]["ready"] is True
 
     payload = {
         "prompt": "fox under moon",
