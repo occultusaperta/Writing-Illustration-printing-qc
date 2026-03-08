@@ -60,6 +60,7 @@ def main() -> None:
     runtime_launch.add_argument("--ssh-port", type=int, default=22)
     runtime_launch.add_argument("--ssh-user")
     runtime_launch.add_argument("--model")
+    runtime_launch.add_argument("--runtime-mode", choices=["fallback", "diffusers"])
 
     runtime_health = sub.add_parser("runtime-health", help="Check runtime provider status and service health")
     runtime_health.add_argument("--instance-id")
@@ -132,7 +133,13 @@ def main() -> None:
             if not host:
                 raise RuntimeError("runtime-launch requires --host or saved runtime state with host")
             orch = RuntimeOrchestrator(runtime_cfg)
-            result = orch.launch_service(host=host, port=args.ssh_port, user=args.ssh_user, model_name=args.model)
+            result = orch.launch_service(
+                host=host,
+                port=args.ssh_port,
+                user=args.ssh_user,
+                model_name=args.model,
+                runtime_mode=args.runtime_mode,
+            )
         elif args.command == "runtime-health":
             orch = RuntimeOrchestrator(runtime_cfg)
             instance_id = args.instance_id or runtime_state.get("instance", {}).get("instance_id")

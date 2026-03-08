@@ -12,4 +12,4 @@ pip install -e .
 
 # Optional runtime packages for actual FLUX generation.
 # The service works without these (falls back to deterministic placeholder image generation).
-pip install "torch>=2.4" "diffusers>=0.31" "transformers>=4.45" accelerate safetensors || true
+pip install "torch>=2.4" "diffusers>=0.31" "transformers>=4.45" accelerate safetensors

@@ -4,7 +4,7 @@ BookForge supports a practical local Flux HTTP contract used by the `flux_local`
 
 ## Endpoints
 
-- `GET /health` → status, service info, runtime mode, model.
+- `GET /health` → status, service info, runtime mode, model, and runtime readiness (`runtime.ready`, `runtime.issues`).
 - `POST /generate` request fields:
   - required: `prompt`, `width`, `height`
   - optional: `negative_prompt`, `steps`, `seed`, `guidance`

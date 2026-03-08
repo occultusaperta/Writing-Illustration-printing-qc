@@ -2,8 +2,13 @@
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
-sudo apt-get update -y
-sudo apt-get install -y python3 python3-venv python3-pip git build-essential
+if command -v sudo >/dev/null 2>&1; then
+  APT_PREFIX="sudo"
+else
+  APT_PREFIX=""
+fi
+$APT_PREFIX apt-get update -y
+$APT_PREFIX apt-get install -y python3 python3-venv python3-pip git build-essential
 
 mkdir -p "$HOME/bookforge_runtime"
 cd "$HOME/bookforge_runtime"

@@ -49,6 +49,23 @@ class FluxRuntimeAdapter:
         )
         return result.images[0]
 
+    def runtime_status(self) -> Dict[str, Any]:
+        mode = (os.getenv("BOOKFORGE_FLUX_RUNTIME_MODE") or "fallback").strip().lower()
+        status: Dict[str, Any] = {"runtime_mode": mode, "ready": True, "issues": []}
+        if mode != "diffusers":
+            return status
+        try:
+            import torch  # type: ignore
+            from diffusers import FluxPipeline  # type: ignore  # noqa: F401
+
+            if not torch.cuda.is_available():
+                status["ready"] = False
+                status["issues"].append("torch.cuda.is_available() is false")
+        except Exception as exc:
+            status["ready"] = False
+            status["issues"].append(f"Diffusers runtime unavailable: {exc}")
+        return status
+
     def generate(self, req: FluxGenerateRequest) -> Tuple[bytes, Dict[str, Any]]:
         started = time.perf_counter()
         mode = (os.getenv("BOOKFORGE_FLUX_RUNTIME_MODE") or "fallback").strip().lower()
@@ -92,6 +109,7 @@ class FluxLocalServiceHandler(BaseHTTPRequestHandler):
                     "supports": ["/generate", "/batch"],
                     "runtime_mode": os.getenv("BOOKFORGE_FLUX_RUNTIME_MODE", "fallback"),
                     "model": os.getenv("BOOKFORGE_FLUX_MODEL", "black-forest-labs/FLUX.1-schnell"),
+                    "runtime": self.adapter.runtime_status(),
                 },
             )
             return

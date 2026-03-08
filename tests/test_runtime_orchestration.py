@@ -74,9 +74,34 @@ def test_runpod_orchestration_picks_b200_and_persists_state(monkeypatch, tmp_pat
             return {"id": instance_id, "desiredStatus": "RUNNING"}
 
     monkeypatch.setenv("RUNPOD_API_KEY", "test-key")
-    cfg = RuntimeConfig(provider="runpod", state_path=str(tmp_path / "runtime.json"))
+    cfg = RuntimeConfig(provider="runpod", max_hourly_usd=0, state_path=str(tmp_path / "runtime.json"))
     orch = RuntimeOrchestrator(cfg)
     orch.provider = FakeRunpodProvider()
     payload = orch.provision()
     assert payload["offer"]["gpu_name"] == "NVIDIA B200"
     assert Path(cfg.state_path).exists()
+
+
+def test_runpod_orchestration_fails_when_b200_exceeds_budget(monkeypatch, tmp_path: Path):
+    class FakeRunpodProvider:
+        name = "runpod"
+
+        def list_offers(self, *, max_hourly_usd: float, min_gpu_ram_gb: int):
+            from bookforge.runtime.providers.base import RuntimeOffer
+
+            assert max_hourly_usd == 0
+            return [RuntimeOffer("runpod", "id-b200", "NVIDIA B200", 1, 2.0, "global", {})]
+
+        def create_instance(self, *, offer_id: str, disk_gb: int, image=None):
+            raise AssertionError("create_instance should not be called when budget gate fails")
+
+    monkeypatch.setenv("RUNPOD_API_KEY", "test-key")
+    cfg = RuntimeConfig(provider="runpod", max_hourly_usd=1.0, state_path=str(tmp_path / "runtime.json"))
+    orch = RuntimeOrchestrator(cfg)
+    orch.provider = FakeRunpodProvider()
+
+    try:
+        orch.provision()
+        raise AssertionError("Expected provision to fail on budget check")
+    except RuntimeError as exc:
+        assert "exceeds" in str(exc)
