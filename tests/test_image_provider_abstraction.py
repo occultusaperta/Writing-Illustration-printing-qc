@@ -102,3 +102,5 @@ def test_studio_uses_locked_reference_paths(monkeypatch, tmp_path: Path):
     assert captured["style_image"] == lock["approved_style"]
     production = json.loads((out / "review" / "production_report.json").read_text(encoding="utf-8"))
     assert production["lock_summary"]["locked_references_used"] is True
+    assert production["authoritative_review_artifact"] == "review/book_quality_report.json"
+    assert "BOOKFORGE_COLOR_SCRIPT" in production["feature_flags"]

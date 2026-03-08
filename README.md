@@ -46,6 +46,28 @@ UI highlights:
 - Built-in estimator for expected Fal calls.
 - Run History, Publisher Checklist, Worst Pages overrides (`OVERRIDES.json`), and artifact open/download controls.
 
+
+## Operator trust order (diagnosing a run)
+
+When diagnosing output quality or deciding whether a run is trustworthy, check artifacts in this order:
+
+1. `preflight_report.json` — hard print gate pass/fail.
+2. `review/qa_report.json` + `review/visual_critic_report.json` — per-page QC outcomes.
+3. `review/book_quality_report.json` — **authoritative unified review artifact**.
+4. `review/production_report.json` — provenance (provider, endpoint, feature flags, runtime metadata).
+5. Legacy review JSON files — compatibility inputs only, not the primary source of truth.
+
+If `verify` says it had to generate `review/book_quality_report.json` from legacy artifacts, treat that run as compatibility-mode: inspect `summary_notes`, `warnings`, and `limitations` before using the summary scores for decisions.
+
+## Feature flags (operator-impacting)
+
+Defaults are conservative and deterministic:
+
+- Enabled by default: `BOOKFORGE_COLOR_SCRIPT`, `BOOKFORGE_PAGE_ARCHITECTURE`, `BOOKFORGE_CAMERA_LANGUAGE`, `BOOKFORGE_HIDDEN_WORLD`, `BOOKFORGE_DYNAMIC_TYPOGRAPHY`, `BOOKFORGE_MONTE_CARLO_LAYOUT`, `BOOKFORGE_STOREFRONT_OPTIMIZATION`, `BOOKFORGE_CHARACTER_COMMERCIAL_SCORING`, `BOOKFORGE_DUAL_AUDIENCE`, `BOOKFORGE_PAGE_TURN_TENSION`.
+- Disabled by default: `BOOKFORGE_RESELECTION`, `BOOKFORGE_TARGETED_REGENERATION`.
+
+`review/production_report.json` now records the resolved feature-flag snapshot used during studio.
+
 ## Preprod outputs
 - Story parse + bible variants (`preprod/bible_variants/v1..vN`)
 - Fal/Flux option images: character, style, cover concept
