@@ -34,10 +34,10 @@ def _img(path):
 
 
 def test_permutation_generation_bounded_and_seeded(tmp_path):
-    cfg = LayoutSearchConfig(max_permutations_per_page=5, random_seed=11)
+    cfg = LayoutSearchConfig(max_permutations_per_page=7, random_seed=11)
     rows1 = generate_layout_permutations(page_numbers=[1], base_layout=_base_layout(), config=cfg, seed=123, is_spread=False)
     rows2 = generate_layout_permutations(page_numbers=[1], base_layout=_base_layout(), config=cfg, seed=123, is_spread=False)
-    assert len(rows1) <= 5
+    assert len(rows1) <= 7
     assert [r.permutation_id for r in rows1] == [r.permutation_id for r in rows2]
 
 
@@ -59,15 +59,39 @@ def test_score_schema_bounds(tmp_path):
     assert 0.0 <= score.confidence <= 1.0
 
 
-def test_hard_rejection_for_invalid_layout(tmp_path):
+def test_bad_vs_good_permutation_separation(tmp_path):
     image = tmp_path / "p.png"
     _img(image)
+    base = _base_layout()
+    base["text_zone"] = {"x": 0.06, "y": 0.72, "w": 0.36, "h": 0.2}
     bad = _base_layout()
-    bad["text_zone"] = {"x": 0.49, "y": 0.84, "w": 0.08, "h": 0.05}
-    cfg = LayoutSearchConfig(max_permutations_per_page=1, enable_text_zone_variation=False, enable_crop_shift=False, enable_variant_swap_within_architecture=False)
-    perm = generate_layout_permutations(page_numbers=[1], base_layout=bad, config=cfg, seed=4, is_spread=False)[0]
-    score = score_layout_permutation(
-        perm,
+    bad["text_zone"] = {"x": 0.495, "y": 0.84, "w": 0.1, "h": 0.08}
+    good_perm = generate_layout_permutations(
+        page_numbers=[1],
+        base_layout=base,
+        config=LayoutSearchConfig(max_permutations_per_page=1, enable_crop_shift=False, enable_text_zone_variation=False, enable_variant_swap_within_architecture=False),
+        seed=10,
+        is_spread=True,
+    )[0]
+    bad_perm = generate_layout_permutations(
+        page_numbers=[1],
+        base_layout=bad,
+        config=LayoutSearchConfig(max_permutations_per_page=1, enable_crop_shift=False, enable_text_zone_variation=False, enable_variant_swap_within_architecture=False),
+        seed=11,
+        is_spread=True,
+    )[0]
+
+    good_score = score_layout_permutation(
+        good_perm,
+        image_path=image,
+        page_text="Short text that should fit.",
+        base_layout=base,
+        page_number=1,
+        is_spread=True,
+        gutter_sensitive=True,
+    )
+    bad_score = score_layout_permutation(
+        bad_perm,
         image_path=image,
         page_text="This is intentionally long text that should not fit into tiny zone." * 8,
         base_layout=bad,
@@ -75,7 +99,39 @@ def test_hard_rejection_for_invalid_layout(tmp_path):
         is_spread=True,
         gutter_sensitive=True,
     )
-    assert score.rejected is True
+    assert good_score.rejected is False
+    assert bad_score.rejected is True
+    assert good_score.composite_score > bad_score.composite_score
+    assert bad_score.rejection_reasons
+
+
+def test_selection_determinism_fixed_seed(tmp_path):
+    image = tmp_path / "p.png"
+    _img(image)
+    cfg = LayoutSearchConfig(max_permutations_per_page=8)
+    kwargs = {
+        "page_numbers": [1],
+        "base_layout": _base_layout(),
+        "image_path": image,
+        "page_text": "A medium block of copy to force fit scoring.",
+        "config": cfg,
+        "seed": 99,
+        "is_spread": False,
+        "architecture_variants": {
+            "fb_1": {
+                "variant_id": "fb_1",
+                "architecture_type": "full_bleed_spread",
+                "zones": [
+                    {"zone_id": "art", "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0},
+                    {"zone_id": "text", "x": 0.08, "y": 0.74, "w": 0.84, "h": 0.2},
+                ],
+            }
+        },
+    }
+    res1 = select_best_layout(**kwargs)
+    res2 = select_best_layout(**kwargs)
+    assert res1.chosen_permutation_id == res2.chosen_permutation_id
+    assert res1.top_score == res2.top_score
 
 
 def test_selected_layout_affects_render_metadata_path(tmp_path):
@@ -86,7 +142,7 @@ def test_selected_layout_affects_render_metadata_path(tmp_path):
         base_layout=_base_layout(),
         image_path=image,
         page_text="Hello there.",
-        config=LayoutSearchConfig(max_permutations_per_page=6),
+        config=LayoutSearchConfig(max_permutations_per_page=8),
         seed=99,
         is_spread=False,
         architecture_variants={
@@ -101,6 +157,7 @@ def test_selected_layout_affects_render_metadata_path(tmp_path):
         },
     )
     assert res.selected_layout["layout_search"]["chosen_permutation_id"] == res.chosen_permutation_id
+    assert "applied_changes" in res.selected_layout["layout_search"]
 
 
 def test_disable_noop_and_verify_package_inclusion(tmp_path, monkeypatch):
@@ -151,7 +208,23 @@ def test_disable_noop_and_verify_package_inclusion(tmp_path, monkeypatch):
     assert result["status"] in {"PASS", "WARN"}
 
 
-def test_report_generation_schema():
-    rep = build_layout_search_report([])
+def test_report_generation_schema_and_rejection_summary(tmp_path):
+    image = tmp_path / "p.png"
+    _img(image)
+    bad = _base_layout()
+    bad["text_zone"] = {"x": 0.495, "y": 0.84, "w": 0.1, "h": 0.08}
+    res = select_best_layout(
+        page_numbers=[1],
+        base_layout=bad,
+        image_path=image,
+        page_text="Very long text " * 120,
+        config=LayoutSearchConfig(max_permutations_per_page=2, enable_crop_shift=False, enable_text_zone_variation=False, enable_variant_swap_within_architecture=False),
+        seed=7,
+        is_spread=True,
+        architecture_variants={},
+    )
+    rep = build_layout_search_report([res])
+    assert rep["schema_version"] == "1.1"
     assert "summary" in rep
     assert "pages" in rep
+    assert "rejection_reasons" in rep["summary"]

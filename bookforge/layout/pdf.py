@@ -420,6 +420,9 @@ class PDFLayoutEngine:
                     "layout_search_chosen_permutation_id": str(((arch.get("layout_search", {}) or {}).get("chosen_permutation_id", "")) if isinstance(arch, dict) else ""),
                     "layout_search_top_score": float(((arch.get("layout_search", {}) or {}).get("top_score", 0.0)) if isinstance(arch, dict) else 0.0),
                     "layout_search_scope": str(arch.get("layout_search_scope", "")) if isinstance(arch, dict) else "",
+                    "layout_search_changed_fields": list((((arch.get("layout_search", {}) or {}).get("applied_changes", {}) or {}).get("changed_fields", [])) if isinstance(arch, dict) else []),
+                    "layout_search_text_zone_delta": dict((((arch.get("layout_search", {}) or {}).get("applied_changes", {}) or {}).get("text_zone_delta", {})) if isinstance(arch, dict) else {}),
+                    "layout_search_art_zone_delta": dict((((arch.get("layout_search", {}) or {}).get("applied_changes", {}) or {}).get("art_zone_delta", {})) if isinstance(arch, dict) else {}),
                 }
             )
             c.showPage()
