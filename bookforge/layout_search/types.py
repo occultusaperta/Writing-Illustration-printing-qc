@@ -37,6 +37,7 @@ class LayoutPermutationScore:
     confidence: float
     rejected: bool
     warnings: List[str] = field(default_factory=list)
+    rejection_reasons: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -74,6 +75,7 @@ class LayoutSearchResult:
     selected_layout: Dict[str, Any]
     rankings: List[Dict[str, Any]]
     warnings: List[str] = field(default_factory=list)
+    rejection_reasons: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
