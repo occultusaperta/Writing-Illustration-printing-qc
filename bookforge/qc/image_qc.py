@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 from PIL import Image
 
+from bookforge.io import write_json
 from bookforge.page_architecture.scoring import score_architecture_variant
 from bookforge.scoring_registry import feature_flag_enabled, scoring_registry
 from bookforge.qc.composition_qc import focus_bleed_overlap
@@ -282,9 +282,6 @@ def choose_best_variant(
             ranking.architecture_tiebreak_weight * (((r.get("metadata") or {}).get("page_architecture_score") or {}).get("composite_score", 0.0)),
             ranking.shot_tiebreak_weight * (((r.get("metadata") or {}).get("shot_adherence_score") or {}).get("composite_score", 0.0)),
             ranking.saliency_tiebreak_weight * (((r.get("metadata") or {}).get("saliency_flow_score") or {}).get("composite_score", 0.0)),
-            ranking.character_tiebreak_weight * (((r.get("metadata") or {}).get("character_commercial_score") or {}).get("composite_score", 0.0)),
-            ranking.dual_audience_tiebreak_weight * (((r.get("metadata") or {}).get("dual_audience_score") or {}).get("composite_score", 0.0)),
-            ranking.page_turn_tiebreak_weight * (((r.get("metadata") or {}).get("page_turn_tension_score") or {}).get("page_turn_tension_score", 0.0)),
         ),
         reverse=True,
     )
@@ -293,5 +290,4 @@ def choose_best_variant(
 
 
 def write_qa_report(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    write_json(path, payload)

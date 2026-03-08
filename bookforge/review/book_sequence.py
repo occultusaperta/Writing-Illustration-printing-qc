@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import mean
 from typing import Any, Dict, List
 
+from bookforge.io import write_json
 from bookforge.saliency_flow import build_saliency_sequence_finding
 from bookforge.typography import build_typography_sequence_finding
 from bookforge.typography.types import TypographySequenceFinding
@@ -691,6 +691,5 @@ def build_book_sequence_report(
 
 
 def write_book_sequence_report(path: Path, report: BookSequenceReport) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+    write_json(path, report.to_dict())
 

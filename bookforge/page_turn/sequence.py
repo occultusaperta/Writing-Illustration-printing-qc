@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from statistics import mean
 from typing import Any, Dict, List
 
+from bookforge.io import write_json
 from bookforge.page_turn.types import PageTurnSequenceFinding, PageTurnTensionReport
 
 
@@ -145,5 +145,4 @@ def build_page_turn_tension_report(*, page_count: int, qa_attempts: List[Dict[st
 
 
 def write_page_turn_tension_report(path: Path, report: PageTurnTensionReport) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+    write_json(path, report.to_dict())
