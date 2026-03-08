@@ -44,3 +44,10 @@ Top-level fields:
 ## Availability / heuristics
 
 Some sections are heuristic and may be absent or low-confidence when corresponding features are disabled. Disabled features are represented in `limitations`.
+
+
+## Operator trust notes
+
+- `review/book_quality_report.json` is the single review artifact operators should read first.
+- Legacy review artifacts remain for compatibility/debug drill-down and can be missing fields without invalidating the authoritative report schema.
+- If `verify` had to generate this report from legacy artifacts, treat the run as compatibility-mode and review `warnings` + `limitations` before using summary score deltas for decisions.

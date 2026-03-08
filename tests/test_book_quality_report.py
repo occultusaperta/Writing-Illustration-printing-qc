@@ -100,6 +100,7 @@ def test_verify_generates_master_from_legacy_when_missing(tmp_path: Path):
     result = BookforgePipeline().verify(str(out))
     assert result["status"] in {"PASS", "WARN"}
     assert (out / "review" / "book_quality_report.json").exists()
+    assert any("compatibility-mode" in w for w in result.get("warnings", []))
 
 
 def test_book_quality_disabled_feature_limitations(tmp_path: Path):

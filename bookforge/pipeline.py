@@ -160,7 +160,7 @@ def _build_planning_prompt_guidance(out: Path) -> Dict[int, Dict[str, Any]]:
 
 
 def _hidden_world_enabled() -> bool:
-    return _feature_flag("BOOKFORGE_HIDDEN_WORLD", default="true")
+    return _feature_flag("BOOKFORGE_HIDDEN_WORLD", default=FEATURE_FLAG_DEFAULTS["BOOKFORGE_HIDDEN_WORLD"])
 
 
 def _load_hidden_world_plan(out: Path) -> Dict[int, Dict[str, Any]]:
@@ -203,28 +203,28 @@ def _load_camera_sequence_plan(out: Path) -> Dict[int, Dict[str, Any]]:
 
 
 def _dynamic_typography_enabled() -> bool:
-    return _feature_flag("BOOKFORGE_DYNAMIC_TYPOGRAPHY", default="true")
+    return _feature_flag("BOOKFORGE_DYNAMIC_TYPOGRAPHY", default=FEATURE_FLAG_DEFAULTS["BOOKFORGE_DYNAMIC_TYPOGRAPHY"])
 
 
 def _storefront_optimization_enabled() -> bool:
-    return _feature_flag("BOOKFORGE_STOREFRONT_OPTIMIZATION", default="true")
+    return _feature_flag("BOOKFORGE_STOREFRONT_OPTIMIZATION", default=FEATURE_FLAG_DEFAULTS["BOOKFORGE_STOREFRONT_OPTIMIZATION"])
 
 
 def _character_commercial_scoring_enabled() -> bool:
-    return _feature_flag("BOOKFORGE_CHARACTER_COMMERCIAL_SCORING", default="true")
+    return _feature_flag("BOOKFORGE_CHARACTER_COMMERCIAL_SCORING", default=FEATURE_FLAG_DEFAULTS["BOOKFORGE_CHARACTER_COMMERCIAL_SCORING"])
 
 
 
 def _dual_audience_enabled() -> bool:
-    return _feature_flag("BOOKFORGE_DUAL_AUDIENCE", default="true")
+    return _feature_flag("BOOKFORGE_DUAL_AUDIENCE", default=FEATURE_FLAG_DEFAULTS["BOOKFORGE_DUAL_AUDIENCE"])
 
 
 def _monte_carlo_layout_enabled() -> bool:
-    return _feature_flag("BOOKFORGE_MONTE_CARLO_LAYOUT", default="true")
+    return _feature_flag("BOOKFORGE_MONTE_CARLO_LAYOUT", default=FEATURE_FLAG_DEFAULTS["BOOKFORGE_MONTE_CARLO_LAYOUT"])
 
 
 def _page_turn_tension_enabled() -> bool:
-    return _feature_flag("BOOKFORGE_PAGE_TURN_TENSION", default="true")
+    return _feature_flag("BOOKFORGE_PAGE_TURN_TENSION", default=FEATURE_FLAG_DEFAULTS["BOOKFORGE_PAGE_TURN_TENSION"])
 
 
 def _build_typography_plans(
@@ -409,6 +409,27 @@ def _studio_debug(msg: str) -> None:
     if _studio_debug_enabled():
         print(f"[studio-debug] {msg}", flush=True)
 
+
+FEATURE_FLAG_DEFAULTS: Dict[str, str] = {
+    "BOOKFORGE_COLOR_SCRIPT": "true",
+    "BOOKFORGE_PAGE_ARCHITECTURE": "true",
+    "BOOKFORGE_CAMERA_LANGUAGE": "true",
+    "BOOKFORGE_HIDDEN_WORLD": "true",
+    "BOOKFORGE_DYNAMIC_TYPOGRAPHY": "true",
+    "BOOKFORGE_MONTE_CARLO_LAYOUT": "true",
+    "BOOKFORGE_STOREFRONT_OPTIMIZATION": "true",
+    "BOOKFORGE_CHARACTER_COMMERCIAL_SCORING": "true",
+    "BOOKFORGE_DUAL_AUDIENCE": "true",
+    "BOOKFORGE_PAGE_TURN_TENSION": "true",
+    "BOOKFORGE_RESELECTION": "false",
+    "BOOKFORGE_TARGETED_REGENERATION": "false",
+}
+
+
+def _feature_flag_snapshot() -> Dict[str, bool]:
+    return {name: _feature_flag(name, default=default) for name, default in FEATURE_FLAG_DEFAULTS.items()}
+
+
 def _fal_key_from_env() -> str:
     import os
 
@@ -486,7 +507,7 @@ class BookforgePipeline:
         (preprod / "layout_options.json").write_text(json.dumps(presets_payload(), indent=2), encoding="utf-8")
 
         planning_dir = preprod / "planning"
-        if _feature_flag("BOOKFORGE_COLOR_SCRIPT", default="true"):
+        if _feature_flag("BOOKFORGE_COLOR_SCRIPT", default=FEATURE_FLAG_DEFAULTS["BOOKFORGE_COLOR_SCRIPT"]):
             analyses, master_palette, page_specs, transitions = plan_color_script(parsed.get("pages", []))
             write_color_planning_artifacts(planning_dir, analyses, master_palette, page_specs, transitions)
         source_pages = []
@@ -495,11 +516,11 @@ class BookforgePipeline:
         else:
             source_pages = [{"page_number": p.get("page_number", i + 1), "narrative_function": "rising_action", "text": p.get("text", "")} for i, p in enumerate(parsed.get("pages", []))]
 
-        if _feature_flag("BOOKFORGE_PAGE_ARCHITECTURE", default="true"):
+        if _feature_flag("BOOKFORGE_PAGE_ARCHITECTURE", default=FEATURE_FLAG_DEFAULTS["BOOKFORGE_PAGE_ARCHITECTURE"]):
             architecture_plan, architecture_report = plan_architecture_sequence(source_pages, genre="picture_book")
             write_arch_planning_artifacts(planning_dir, architecture_plan, architecture_report)
 
-        if _feature_flag("BOOKFORGE_CAMERA_LANGUAGE", default="true"):
+        if _feature_flag("BOOKFORGE_CAMERA_LANGUAGE", default=FEATURE_FLAG_DEFAULTS["BOOKFORGE_CAMERA_LANGUAGE"]):
             camera_plan = plan_camera_sequence(source_pages)
             write_camera_planning_artifact(planning_dir, camera_plan)
 
@@ -950,7 +971,7 @@ class BookforgePipeline:
         planning_prompt_guidance = _build_planning_prompt_guidance(out)
         color_spec_by_page, master_palette = _load_color_scoring_context(out)
         architecture_by_page = _load_architecture_scoring_context(out)
-        camera_by_page = _load_camera_sequence_plan(out) if _feature_flag("BOOKFORGE_CAMERA_LANGUAGE", default="true") else {}
+        camera_by_page = _load_camera_sequence_plan(out) if _feature_flag("BOOKFORGE_CAMERA_LANGUAGE", default=FEATURE_FLAG_DEFAULTS["BOOKFORGE_CAMERA_LANGUAGE"]) else {}
         hidden_world_by_page = _load_hidden_world_plan(out) if _hidden_world_enabled() else {}
         typography_by_page = _build_typography_plans(
             parsed=parsed,
@@ -1314,7 +1335,7 @@ class BookforgePipeline:
         )[:5]
         cache_bools = [hit for arr in cache_hits.values() for hit in arr]
         cache_hit_rate = (sum(1 for x in cache_bools if x) / len(cache_bools)) if cache_bools else 0.0
-        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "hidden_world": {"enabled": _hidden_world_enabled(), "planned_pages": len(hidden_world_by_page)}, "storefront": {"enabled": _storefront_optimization_enabled()}, "character_commercial_scoring": {"enabled": _character_commercial_scoring_enabled()}, "dual_audience": {"enabled": _dual_audience_enabled()}, "page_turn_tension": {"enabled": _page_turn_tension_enabled()}, "layout_search": {"enabled": _monte_carlo_layout_enabled(), "entries": len(layout_search_results)}, "applied_page_architecture": applied_arch_review}
+        production_payload = {"lock_summary": {"approved_variant": lock["approved_variant"], "back_matter": lock.get("back_matter", {}), "provider": provider_name, "locked_references_used": True, "character_reference": lock.get("approved_character"), "style_reference": lock.get("approved_style")}, "seed_plan": lock.get("seeds", {}), "qa_thresholds": lock.get("qa", {}), "post": lock.get("post", {}), "pdf": lock.get("pdf", {}), "regen_counts": {str(p["page"]): p.get("attempt", 1) for p in qa_attempts}, "spread_pairs": spread_pairs, "checkpoint_overrides_applied": checkpoint_summary, "drift": {"mean": float(sum(drift_rows)/len(drift_rows)) if drift_rows else 0.0, "top_pages": drift_pages}, "cache_hit_rate": cache_hit_rate, "provider": {"name": provider_name, "endpoint": generated.get("endpoint", endpoint)}, "editorial": {"age_band": lock.get("editorial", {}).get("age_band", "6-8"), "artifact_intensity": lock.get("editorial", {}).get("artifact_intensity", "light"), "readaloud_script_enabled": lock.get("editorial", {}).get("readaloud_script_enabled", True), "premise": lock.get("editorial", {}).get("hook_pack", {}).get("one_sentence_premise", "")}, "font_runtime": {"font_name": getattr(engine, "font_name", ""), "fallback_reason": getattr(engine, "font_fallback_reason", "")}, "typography": {"dynamic_enabled": _dynamic_typography_enabled(), "planned_pages": len(typography_by_page)}, "hidden_world": {"enabled": _hidden_world_enabled(), "planned_pages": len(hidden_world_by_page)}, "storefront": {"enabled": _storefront_optimization_enabled()}, "character_commercial_scoring": {"enabled": _character_commercial_scoring_enabled()}, "dual_audience": {"enabled": _dual_audience_enabled()}, "page_turn_tension": {"enabled": _page_turn_tension_enabled()}, "layout_search": {"enabled": _monte_carlo_layout_enabled(), "entries": len(layout_search_results)}, "feature_flags": _feature_flag_snapshot(), "authoritative_review_artifact": "review/book_quality_report.json", "legacy_review_artifacts": ["review/book_sequence_report.json", "review/layout_search_report.json", "review/typography_report.json", "review/reselection_report.json", "review/targeted_regeneration_report.json", "review/sequence_optimization_report.json", "review/hidden_world_report.json", "review/storefront_optimization_report.json", "review/character_commercial_report.json", "review/dual_audience_report.json", "review/page_turn_tension_report.json"], "applied_page_architecture": applied_arch_review}
         write_production_report(review / "production_report.json", production_payload)
         self._write_quality_summary(out, qa_attempts, cache_hits, lock)
         _studio_debug("running premium visual QC")
@@ -1426,7 +1447,7 @@ class BookforgePipeline:
         )
         write_storefront_optimization_report(review / "storefront_optimization_report.json", storefront_report)
 
-        reselection_enabled = _feature_flag("BOOKFORGE_RESELECTION", "false")
+        reselection_enabled = _feature_flag("BOOKFORGE_RESELECTION", FEATURE_FLAG_DEFAULTS["BOOKFORGE_RESELECTION"])
         before_sequence_score = float(sequence_report.overall_sequence_score)
         reselection_report = run_bounded_reselection(
             selected=selected,
@@ -1509,7 +1530,7 @@ class BookforgePipeline:
                 )
         write_reselection_report(review / "reselection_report.json", reselection_report)
 
-        targeted_regen_enabled = _feature_flag("BOOKFORGE_TARGETED_REGENERATION", "false")
+        targeted_regen_enabled = _feature_flag("BOOKFORGE_TARGETED_REGENERATION", FEATURE_FLAG_DEFAULTS["BOOKFORGE_TARGETED_REGENERATION"])
         targeted_before_sequence_score = float(sequence_report.overall_sequence_score)
         lock_context = {
             "approved_character_reference": lock.get("approved_character_reference", lock.get("approved_character", "")),
@@ -1846,12 +1867,12 @@ class BookforgePipeline:
         book_quality_report_path = review_dir / "book_quality_report.json"
         if not book_quality_report_path.exists():
             write_book_quality_report(book_quality_report_path, build_book_quality_report(review_dir))
-            warnings.append("Generated review/book_quality_report.json from legacy review artifacts")
+            warnings.append("review/book_quality_report.json was missing; verify generated it from legacy compatibility artifacts. Treat this run as compatibility-mode and inspect summary_notes/limitations before trusting ranking deltas.")
         if book_quality_report_path.exists():
             payload = json.loads(book_quality_report_path.read_text(encoding="utf-8"))
             failures.extend(validate_book_quality_report(payload))
         else:
-            failures.append("Missing review/book_quality_report.json")
+            failures.append("Missing review/book_quality_report.json (authoritative review artifact).")
 
         for name, required_fields in legacy_artifacts.items():
             path = review_dir / name
@@ -1886,7 +1907,7 @@ class BookforgePipeline:
             if companion_dir.exists() and not any(n.startswith("review/companion/") for n in names):
                 failures.append("bookforge_package.zip missing review/companion artifacts")
         else:
-            warnings.append("bookforge_package.zip not found; run studio packaging step")
+            warnings.append("bookforge_package.zip not found; run studio to complete packaging. Verify status still reflects filesystem artifacts in out/.")
 
         status = "PASS"
         if failures:
