@@ -89,6 +89,29 @@ def test_accept_move_above_threshold_deterministic(tmp_path, monkeypatch):
     assert r1.accepted_moves
 
 
+def test_deterministic_move_selection_tiebreak_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOOKFORGE_SEQUENCE_OPTIMIZATION", "true")
+    monkeypatch.setenv("BOOKFORGE_SEQUENCE_OPTIMIZER_MIN_IMPROVEMENT", "0.0")
+    monkeypatch.setenv("BOOKFORGE_SEQUENCE_OPTIMIZER_OPENING_PROTECTION", "0")
+    monkeypatch.setenv("BOOKFORGE_SEQUENCE_OPTIMIZER_CLIMAX_PROTECTION", "0")
+    monkeypatch.setenv("BOOKFORGE_SEQUENCE_OPTIMIZER_ENDING_PROTECTION", "0")
+    qa = [
+        {
+            "page": 3,
+            "attempt": 1,
+            "best": _variant("/x/current.png", color=0.62, ensemble=0.62, arch=0.58, sal=0.56, shot=0.56, drift=0.45, overlap=0.2),
+            "variants": [
+                _variant("/x/current.png", color=0.62, ensemble=0.62, arch=0.58, sal=0.56, shot=0.56, drift=0.45, overlap=0.2),
+                _variant("/x/up_b.png", color=0.82, ensemble=0.85, arch=0.79, sal=0.78, shot=0.75, drift=0.2, overlap=0.05),
+                _variant("/x/up_a.png", color=0.82, ensemble=0.85, arch=0.79, sal=0.78, shot=0.75, drift=0.2, overlap=0.05),
+            ],
+        }
+    ]
+    result = run_sequence_optimization(selected=["a", "b", "/x/current.png", "d"], qa_attempts=qa, sequence_report=_sequence_report())
+    assert result.accepted_moves
+    assert result.accepted_moves[0].candidate.runner_up_candidate_path == "/x/up_a.png"
+
+
 def test_reject_move_on_local_regression(tmp_path, monkeypatch):
     monkeypatch.setenv("BOOKFORGE_SEQUENCE_OPTIMIZATION", "true")
     monkeypatch.setenv("BOOKFORGE_SEQUENCE_OPTIMIZER_MIN_IMPROVEMENT", "0.0")
@@ -100,6 +123,29 @@ def test_reject_move_on_local_regression(tmp_path, monkeypatch):
     r = run_sequence_optimization(selected=["a", "b", "/x/current.png", "d"], qa_attempts=qa, sequence_report=_sequence_report())
     assert not r.accepted_moves
     assert r.rejected_moves
+
+
+def test_reject_harmful_swap_even_if_summary_signal_rises(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOOKFORGE_SEQUENCE_OPTIMIZATION", "true")
+    monkeypatch.setenv("BOOKFORGE_SEQUENCE_OPTIMIZER_MIN_IMPROVEMENT", "0.0")
+    monkeypatch.setenv("BOOKFORGE_SEQUENCE_OPTIMIZER_MAX_LOCAL_REGRESSION", "0.05")
+    monkeypatch.setenv("BOOKFORGE_SEQUENCE_OPTIMIZER_OPENING_PROTECTION", "0")
+    monkeypatch.setenv("BOOKFORGE_SEQUENCE_OPTIMIZER_CLIMAX_PROTECTION", "0")
+    monkeypatch.setenv("BOOKFORGE_SEQUENCE_OPTIMIZER_ENDING_PROTECTION", "0")
+    qa = [
+        {
+            "page": 3,
+            "attempt": 1,
+            "best": _variant("/x/current.png", color=0.6, arch=0.7, sal=0.75, shot=0.7, hidden=0.7, drift=0.55),
+            "variants": [
+                _variant("/x/current.png", color=0.6, arch=0.7, sal=0.75, shot=0.7, hidden=0.7, drift=0.55),
+                _variant("/x/harmful.png", color=0.95, arch=0.93, sal=0.35, shot=0.35, hidden=0.35, drift=0.2),
+            ],
+        }
+    ]
+    r = run_sequence_optimization(selected=["a", "b", "/x/current.png", "d"], qa_attempts=qa, sequence_report=_sequence_report())
+    assert not r.accepted_moves
+    assert any("saliency_floor" in move.reason or any("check:saliency_floor=fail" in n for n in move.notes) for move in r.rejected_moves)
 
 
 def test_move_cap_and_protection(tmp_path, monkeypatch):
@@ -122,9 +168,12 @@ def test_move_cap_and_protection(tmp_path, monkeypatch):
                 ],
             }
         )
-    r = run_sequence_optimization(selected=["1", "2", "3", "4"], qa_attempts=qa, sequence_report=_sequence_report())
+    seq = _sequence_report()
+    seq["weak_clusters"] = [{"severity": "warning", "pages": [2, 3]}]
+    r = run_sequence_optimization(selected=["1", "2", "3", "4"], qa_attempts=qa, sequence_report=seq)
     assert len(r.accepted_moves) <= 1
     assert all(m.page not in {1, 4} for m in r.accepted_moves)
+    assert r.cap_hit is True
 
 
 def test_apply_and_report_schema_and_verify_expectations(tmp_path, monkeypatch):

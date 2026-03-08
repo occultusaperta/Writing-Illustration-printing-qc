@@ -7,6 +7,7 @@ from bookforge.sequence_optimizer.scoring import (
     composite_delta,
     local_score_bundle,
     move_component_deltas,
+    objective_delta,
     sequence_summary_from_report,
 )
 from bookforge.sequence_optimizer.types import (
@@ -86,6 +87,102 @@ def _priority_pages(sequence_report: Dict[str, Any], page_count: int) -> List[in
     return weak
 
 
+def _neighbor_local_bundles(page: int, pools: Dict[int, Dict[str, Any]]) -> List[Dict[str, float]]:
+    bundles: List[Dict[str, float]] = []
+    for neighbor_page in (page - 1, page + 1):
+        attempt = pools.get(neighbor_page)
+        if not isinstance(attempt, dict):
+            continue
+        best = attempt.get("best", {}) if isinstance(attempt.get("best", {}), dict) else {}
+        if best:
+            bundles.append(local_score_bundle(best))
+    return bundles
+
+
+def _evaluate_move(
+    *,
+    cfg: SequenceOptimizationConfig,
+    page: int,
+    idx: int,
+    current: Dict[str, Any],
+    alternative: Dict[str, Any],
+    sequence_report: Dict[str, Any],
+    before_summary: Dict[str, float],
+    neighbor_local_bundles: List[Dict[str, float]],
+    page_count: int,
+) -> SequenceOptimizationMove:
+    deltas = move_component_deltas(
+        page=page,
+        current=current,
+        alternative=alternative,
+        sequence_report=sequence_report,
+        opening_window=max(1, cfg.opening_pages_protection),
+        climax_window=max(1, cfg.climax_pages_protection),
+        ending_window=max(1, cfg.ending_pages_protection),
+        page_count=page_count,
+        neighbor_local_bundles=neighbor_local_bundles,
+    )
+    before_local = local_score_bundle(current)
+    after_local = local_score_bundle(alternative)
+    local_delta = float(deltas.get("local_composite", 0.0) or 0.0)
+    raw_net = composite_delta(deltas)
+    objective_net = objective_delta(
+        deltas=deltas,
+        before_summary=before_summary,
+        weak_cluster_page=any(page in (c.get("pages") or []) for c in sequence_report.get("weak_clusters", []) if isinstance(c, dict)),
+    )
+
+    checks = {
+        "objective_minimum": objective_net >= cfg.minimum_net_improvement,
+        "local_floor": local_delta >= -cfg.max_local_regression_tolerance,
+        "saliency_floor": float(deltas.get("saliency_flow_score", 0.0) or 0.0) >= -0.02,
+        "camera_floor": float(deltas.get("camera_flow_score", 0.0) or 0.0) >= -0.02,
+        "typography_floor": float(deltas.get("typography_sequence_score", 0.0) or 0.0) >= -0.015,
+        "hidden_world_floor": float(deltas.get("hidden_world_continuity_score", 0.0) or 0.0) >= -0.015,
+        "architecture_floor": float(deltas.get("architecture_flow_score", 0.0) or 0.0) >= -0.015,
+        "summary_without_raw_collapse": objective_net > 0.0 or raw_net >= 0.0,
+    }
+    accepted = all(checks.values())
+
+    failed = [k for k, ok in checks.items() if not ok]
+    reason = "Accepted: objective gain with local floors respected."
+    if not accepted:
+        reason = f"Rejected: failed checks {', '.join(failed)}."
+
+    notes = [
+        f"raw_net={raw_net:.4f}",
+        f"objective_net={objective_net:.4f}",
+        f"local_delta={local_delta:.4f}",
+    ]
+    notes.extend(f"check:{name}={'pass' if ok else 'fail'}" for name, ok in checks.items())
+
+    cand = SequenceOptimizationCandidate(
+        page=page,
+        scope="page",
+        selected_candidate_path=str(current.get("path", "")),
+        runner_up_candidate_path=str(alternative.get("path", "")),
+        selected_candidate_id=f"p{page}:selected",
+        runner_up_candidate_id=f"p{page}:runner_up:{idx}",
+        local_score_bundle=before_local,
+        sequence_contribution_bundle={k: float(v) for k, v in deltas.items() if k != "local_composite"},
+        warnings=[],
+        notes=[f"neighbor_context_count={len(neighbor_local_bundles)}"],
+    )
+    return SequenceOptimizationMove(
+        page,
+        cand,
+        before_local,
+        after_local,
+        deltas,
+        objective_net,
+        local_delta,
+        accepted,
+        reason,
+        warnings=[],
+        notes=notes,
+    )
+
+
 def run_sequence_optimization(
     *,
     selected: List[str],
@@ -119,56 +216,40 @@ def run_sequence_optimization(
         current_path = str(current.get("path", ""))
         protected = _protected(page, page_count, cfg)
         if protected:
-            decisions.append(SequenceOptimizationDecision(page, True, False, selected[page - 1], selected[page - 1], "Protected opening/climax/ending page.", None, [], [], []))
+            decisions.append(SequenceOptimizationDecision(page, True, False, selected[page - 1], selected[page - 1], "Protected opening/climax/ending page.", None, [], [], ["By design this page is immutable for bounded pass."]))
             continue
 
         variants = [v for v in attempt.get("variants", []) if isinstance(v, dict)]
-        runner_ups = [v for v in variants if str(v.get("path", "")) and str(v.get("path", "")) != current_path][: cfg.max_candidates_per_page]
+        runner_ups = [v for v in variants if str(v.get("path", "")) and str(v.get("path", "")) != current_path]
         if not runner_ups:
             decisions.append(SequenceOptimizationDecision(page, True, False, selected[page - 1], selected[page - 1], "No runner-up pool for page.", None, [], ["Runner-up variants unavailable."], []))
             continue
 
+        # exploit runner-up pools by ranking via local composite then evaluating bounded prefix.
+        ranked_runner_ups = sorted(runner_ups, key=lambda row: (-local_score_bundle(row)["local_composite"], str(row.get("path", ""))))
+        bounded_runner_ups = ranked_runner_ups[: cfg.max_candidates_per_page]
         rejected: List[SequenceOptimizationMove] = []
         best_move: SequenceOptimizationMove | None = None
-        before_local = local_score_bundle(current)
+        neighbor_bundles = _neighbor_local_bundles(page, pools)
 
-        for idx, alt in enumerate(runner_ups, start=1):
-            deltas = move_component_deltas(
+        for idx, alt in enumerate(bounded_runner_ups, start=1):
+            move = _evaluate_move(
+                cfg=cfg,
                 page=page,
+                idx=idx,
                 current=current,
                 alternative=alt,
                 sequence_report=sequence_report,
-                opening_window=max(1, cfg.opening_pages_protection),
-                climax_window=max(1, cfg.climax_pages_protection),
-                ending_window=max(1, cfg.ending_pages_protection),
+                before_summary=before_summary,
+                neighbor_local_bundles=neighbor_bundles,
                 page_count=page_count,
             )
-            net = composite_delta(deltas)
-            after_local = local_score_bundle(alt)
-            local_delta = float(deltas.get("local_composite", 0.0) or 0.0)
-            accepted = bool(
-                net >= cfg.minimum_net_improvement
-                and local_delta >= -cfg.max_local_regression_tolerance
-                and float(deltas.get("saliency_flow_score", 0.0) or 0.0) >= -0.03
-            )
-            reason = "Accepted threshold candidate." if accepted else "Rejected: insufficient net improvement or local regression tolerance exceeded."
-            cand = SequenceOptimizationCandidate(
-                page=page,
-                scope="page",
-                selected_candidate_path=current_path,
-                runner_up_candidate_path=str(alt.get("path", "")),
-                selected_candidate_id=f"p{page}:selected",
-                runner_up_candidate_id=f"p{page}:runner_up:{idx}",
-                local_score_bundle=before_local,
-                sequence_contribution_bundle={k: float(v) for k, v in deltas.items() if k != "local_composite"},
-                warnings=[],
-                notes=[],
-            )
-            move = SequenceOptimizationMove(page, cand, before_local, after_local, deltas, net, local_delta, accepted, reason, [], [])
             all_moves.append(move)
-            if best_move is None or move.net_delta > best_move.net_delta:
+            if best_move is None or move.net_delta > best_move.net_delta or (
+                move.net_delta == best_move.net_delta and move.local_delta > best_move.local_delta
+            ):
                 best_move = move
-            if not accepted:
+            if not move.accepted:
                 rejected.append(move)
 
         decisions.append(
@@ -178,15 +259,19 @@ def run_sequence_optimization(
                 accepted=bool(best_move and best_move.accepted),
                 selected_before=selected[page - 1],
                 selected_after=(best_move.candidate.runner_up_candidate_path if best_move and best_move.accepted else selected[page - 1]),
-                reason=("Accepted best candidate move." if best_move and best_move.accepted else "Best candidate did not meet thresholds."),
+                reason=(
+                    "Accepted highest-objective candidate from bounded runner-up pool."
+                    if best_move and best_move.accepted
+                    else "No candidate met bounded objective and floor checks."
+                ),
                 best_move=best_move,
                 rejected_moves=rejected,
                 warnings=[],
-                notes=[],
+                notes=[f"runner_up_pool_size={len(runner_ups)}", f"runner_up_evaluated={len(bounded_runner_ups)}"],
             )
         )
 
-    accepted_sorted = sorted([m for m in all_moves if m.accepted], key=lambda m: (-m.net_delta, m.page))
+    accepted_sorted = sorted([m for m in all_moves if m.accepted], key=lambda m: (-m.net_delta, -m.local_delta, m.page, m.candidate.runner_up_candidate_path))
     accepted: List[SequenceOptimizationMove] = []
     used_pages: set[int] = set()
     for move in accepted_sorted:
