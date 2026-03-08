@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Dict, List
 
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+
+from bookforge.io import write_json
 
 
 def generate_proof_pack(output_pdf: Path, cover_path: Path, interior_pages: List[Path], metadata: Dict[str, Any], qa_attempts: List[Dict[str, Any]]) -> None:
@@ -53,5 +54,4 @@ def generate_proof_pack(output_pdf: Path, cover_path: Path, interior_pages: List
 
 
 def write_production_report(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    write_json(path, payload)

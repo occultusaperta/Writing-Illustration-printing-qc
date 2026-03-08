@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
 from PIL import Image
 
+from bookforge.io import write_json
 from bookforge.review.reselection import _score_local, _score_sequence_support
 from bookforge.scoring_registry import scoring_registry
 from bookforge.utils import clamp01
@@ -82,8 +82,7 @@ class RegenerationRunReport:
 
 
 def write_targeted_regeneration_report(path: Path, report: RegenerationRunReport) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+    write_json(path, report.to_dict())
 
 
 def _weak_dimensions(candidate: Dict[str, Any]) -> List[str]:

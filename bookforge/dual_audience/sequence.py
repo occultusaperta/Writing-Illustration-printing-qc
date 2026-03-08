@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from statistics import mean
 from typing import Any, Dict, List
 
+from bookforge.io import write_json
 from bookforge.dual_audience.types import DualAudienceReport, DualAudienceSequenceFinding
 
 
@@ -127,5 +127,4 @@ def build_dual_audience_report(*, page_count: int, qa_attempts: List[Dict[str, A
 
 
 def write_dual_audience_report(path: Path, report: DualAudienceReport) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+    write_json(path, report.to_dict())

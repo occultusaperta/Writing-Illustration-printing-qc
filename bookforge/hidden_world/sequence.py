@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from bookforge.io import write_json
 from bookforge.hidden_world.types import HiddenWorldSequenceFinding
 
 
@@ -112,5 +112,4 @@ def build_hidden_world_sequence_finding(
 
 
 def write_hidden_world_report(path: Path, finding: HiddenWorldSequenceFinding) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(finding.to_dict(), indent=2), encoding="utf-8")
+    write_json(path, finding.to_dict())

@@ -39,9 +39,6 @@ class ImageQCRankingConfig:
     architecture_tiebreak_weight: float = 1.0
     shot_tiebreak_weight: float = 0.15
     saliency_tiebreak_weight: float = 0.05
-    character_tiebreak_weight: float = 0.04
-    dual_audience_tiebreak_weight: float = 0.035
-    page_turn_tiebreak_weight: float = 0.02
 
 
 @dataclass(frozen=True)

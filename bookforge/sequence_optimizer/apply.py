@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Dict, List
 
 from PIL import Image
 
+from bookforge.io import write_json
 from bookforge.sequence_optimizer.search import accepted_move_paths
 from bookforge.sequence_optimizer.types import SequenceOptimizationReport
 
 
 def write_sequence_optimization_report(path: Path, report: SequenceOptimizationReport) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+    write_json(path, report.to_dict())
 
 
 def apply_sequence_optimization_decisions(

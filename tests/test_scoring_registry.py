@@ -88,3 +88,10 @@ def test_feature_flags_disabled_skip_optional_metadata(monkeypatch, tmp_path: Pa
     assert "saliency_flow_score" not in metadata
     assert "dual_audience_score" not in metadata
     assert "page_turn_tension_score" not in metadata
+
+
+def test_image_qc_ranking_deemphasizes_ultra_weak_tiebreaks() -> None:
+    ranking = scoring_registry().image_qc_ranking
+    assert not hasattr(ranking, "character_tiebreak_weight")
+    assert not hasattr(ranking, "dual_audience_tiebreak_weight")
+    assert not hasattr(ranking, "page_turn_tiebreak_weight")

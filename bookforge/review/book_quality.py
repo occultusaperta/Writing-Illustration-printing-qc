@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from bookforge.io import write_json
+
 SCHEMA_VERSION = "1.0"
 MASTER_ARTIFACT_NAME = "book_quality_report.json"
 LEGACY_ARTIFACTS = [
@@ -138,5 +140,4 @@ def validate_book_quality_report(payload: Dict[str, Any]) -> List[str]:
 
 
 def write_book_quality_report(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    write_json(path, payload)

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from bookforge.io import write_json
 from bookforge.storefront.look_inside import build_look_inside_sequence_report
 from bookforge.storefront.sequence import build_storefront_sequence_findings
 from bookforge.storefront.thumbnail import score_cover_thumbnail
@@ -91,5 +91,4 @@ def build_storefront_optimization_report(
 
 
 def write_storefront_optimization_report(path: Path, report: StorefrontOptimizationReport) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+    write_json(path, report.to_dict())

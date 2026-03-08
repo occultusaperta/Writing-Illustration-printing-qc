@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
 from PIL import Image
+from bookforge.io import write_json
 from bookforge.scoring_registry import scoring_registry, transition_target
 from bookforge.utils import clamp01
 
@@ -64,8 +64,7 @@ class ReselectionRunReport:
 
 
 def write_reselection_report(path: Path, report: ReselectionRunReport) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+    write_json(path, report.to_dict())
 
 
 def _score_local(candidate: Dict[str, Any]) -> float:
