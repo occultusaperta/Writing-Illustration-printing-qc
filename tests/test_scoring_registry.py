@@ -90,8 +90,59 @@ def test_feature_flags_disabled_skip_optional_metadata(monkeypatch, tmp_path: Pa
     assert "page_turn_tension_score" not in metadata
 
 
-def test_image_qc_ranking_deemphasizes_ultra_weak_tiebreaks() -> None:
+def test_image_qc_ranking_restores_bounded_character_and_dual_tiebreaks() -> None:
     ranking = scoring_registry().image_qc_ranking
-    assert not hasattr(ranking, "character_tiebreak_weight")
-    assert not hasattr(ranking, "dual_audience_tiebreak_weight")
+    assert ranking.character_tiebreak_weight > 0.0
+    assert 0.0 < ranking.character_tiebreak_floor < 1.0
+    assert 0.0 < ranking.character_tiebreak_confidence_floor < 1.0
+    assert ranking.dual_audience_tiebreak_weight > 0.0
+    assert 0.0 < ranking.dual_audience_tiebreak_floor < 1.0
+
+
+def test_bounded_tiebreaks_change_ordering_in_close_candidates() -> None:
+    ranking = scoring_registry().image_qc_ranking
+
+    def key(report):
+        meta = report.get("metadata") or {}
+
+        def bounded(raw, floor, weight):
+            bounded_score = max(0.0, min(1.0, float(raw)))
+            if bounded_score < floor:
+                return 0.0
+            return weight * (bounded_score - floor) / (1.0 - floor)
+
+        character = meta.get("character_commercial_score") or {}
+        character_weight = ranking.character_tiebreak_weight if float(character.get("confidence", 0.0) or 0.0) >= ranking.character_tiebreak_confidence_floor else 0.0
+        return (
+            True,
+            0.0,
+            1.0,
+            10.0,
+            0.0,
+            0.5,
+            0.5,
+            0.5,
+            bounded(character.get("composite_score", 0.0), ranking.character_tiebreak_floor, character_weight),
+            bounded(((meta.get("dual_audience_score") or {}).get("composite_score", 0.0)), ranking.dual_audience_tiebreak_floor, ranking.dual_audience_tiebreak_weight),
+        )
+
+    candidate_lo = {
+        "metadata": {
+            "character_commercial_score": {"composite_score": 0.52, "confidence": 0.8},
+            "dual_audience_score": {"composite_score": 0.56},
+        }
+    }
+    candidate_hi = {
+        "metadata": {
+            "character_commercial_score": {"composite_score": 0.91, "confidence": 0.86},
+            "dual_audience_score": {"composite_score": 0.9},
+        }
+    }
+
+    ranked = sorted([candidate_lo, candidate_hi], key=key, reverse=True)
+    assert ranked[0] is candidate_hi
+
+
+def test_page_turn_signal_is_metadata_only_for_image_qc_ranking() -> None:
+    ranking = scoring_registry().image_qc_ranking
     assert not hasattr(ranking, "page_turn_tiebreak_weight")

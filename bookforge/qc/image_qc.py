@@ -139,6 +139,14 @@ def _variant_report(path: Path, qa_config: Dict[str, Any], style_ref: Path | Non
     return report
 
 
+def _bounded_tiebreak_signal(raw_score: float, *, floor: float, weight: float) -> float:
+    if weight <= 0.0:
+        return 0.0
+    bounded = max(0.0, min(1.0, float(raw_score)))
+    if bounded < floor:
+        return 0.0
+    return weight * (bounded - floor) / max(1e-9, (1.0 - floor))
+
 def choose_best_variant(
     paths: List[Path],
     qa_config: Dict[str, Any],
@@ -282,6 +290,22 @@ def choose_best_variant(
             ranking.architecture_tiebreak_weight * (((r.get("metadata") or {}).get("page_architecture_score") or {}).get("composite_score", 0.0)),
             ranking.shot_tiebreak_weight * (((r.get("metadata") or {}).get("shot_adherence_score") or {}).get("composite_score", 0.0)),
             ranking.saliency_tiebreak_weight * (((r.get("metadata") or {}).get("saliency_flow_score") or {}).get("composite_score", 0.0)),
+            _bounded_tiebreak_signal(
+                (((r.get("metadata") or {}).get("character_commercial_score") or {}).get("composite_score", 0.0)),
+                floor=ranking.character_tiebreak_floor,
+                weight=(
+                    ranking.character_tiebreak_weight
+                    if float(
+                        (((r.get("metadata") or {}).get("character_commercial_score") or {}).get("confidence", 0.0) or 0.0)
+                    ) >= ranking.character_tiebreak_confidence_floor
+                    else 0.0
+                ),
+            ),
+            _bounded_tiebreak_signal(
+                (((r.get("metadata") or {}).get("dual_audience_score") or {}).get("composite_score", 0.0)),
+                floor=ranking.dual_audience_tiebreak_floor,
+                weight=ranking.dual_audience_tiebreak_weight,
+            ),
         ),
         reverse=True,
     )
